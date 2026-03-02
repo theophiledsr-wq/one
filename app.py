@@ -13,6 +13,7 @@ st.set_page_config(page_title="European Portfolio Master Pro", layout="wide")
 # --- BANDEAU ANIMÉ (TICKER TAPE) ---
 # --- BANDEAU ANIMÉ RALENTI (TICKER TAPE) ---
 def display_animated_ticker():
+    # Liste d'indices avec tickers robustes
     indices = {
         "^FCHI": "CAC 40",
         "^GDAXI": "DAX 40",
@@ -23,6 +24,47 @@ def display_animated_ticker():
         "BTC-USD": "BITCOIN",
         "GC=F": "OR"
     }
+    
+    try:
+        # On télécharge 7 jours pour être SÛR d'avoir au moins 2 clôtures valides (gestion week-end/fériés)
+        data = yf.download(list(indices.keys()), period="7d", interval="1d", progress=False)['Close']
+        
+        # Nettoyage : on remplit les trous (ffill) et on ne garde que les colonnes qui ont des données
+        data = data.ffill().dropna(axis=0, how='all')
+        
+        ticker_items = ""
+        for ticker, name in indices.items():
+            if ticker in data.columns:
+                series = data[ticker].dropna()
+                if len(series) >= 2:
+                    current = series.iloc[-1]
+                    prev = series.iloc[-2]
+                    
+                    # Calcul sécurisé de la variation
+                    if prev != 0 and not np.isnan(current) and not np.isnan(prev):
+                        var = ((current - prev) / prev) * 100
+                        color = "#00ff00" if var >= 0 else "#ff4b4b"
+                        icon = "▲" if var >= 0 else "▼"
+                        sign = "+" if var >= 0 else ""
+                        
+                        ticker_items += f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; **{name}** {current:,.2f} <span style='color:{color};'>{icon} {sign}{var:.2f}%</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |"
+
+        # Si aucune donnée n'est dispo, on affiche un message discret
+        if not ticker_items:
+            ticker_items = "Flux de données en attente... &nbsp;&nbsp;&nbsp;&nbsp; |"
+
+        full_content = ticker_items * 3 
+
+        st.markdown(f"""
+            <style>
+            @keyframes marquee {{ 0% {{ transform: translateX(0); }} 100% {{ transform: translateX(-50%); }} }}
+            .ticker-wrap {{ width: 100%; overflow: hidden; background-color: #0e1117; padding: 12px 0; border-bottom: 2px solid #31333f; white-space: nowrap; }}
+            .ticker-move {{ display: inline-block; white-space: nowrap; animation: marquee 80s linear infinite; font-family: sans-serif; font-size: 1.1rem; color: white; }}
+            </style>
+            <div class="ticker-wrap"><div class="ticker-move">{full_content}</div></div>
+        """, unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"Erreur technique bandeau : {e}")
     
     ticker_data = yf.download(list(indices.keys()), period="2d", progress=False)['Close']
     
