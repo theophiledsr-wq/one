@@ -10,7 +10,7 @@ from scipy.linalg import cholesky
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="European Portfolio Master Pro", layout="wide")
 
-# --- BANDEAU ANIMÉ (TICKER TAPE) ---
+# --- BANDEAU ANIMÉ RALENTI (TICKER TAPE) ---
 def display_animated_ticker():
     indices = {
         "^FCHI": "CAC 40",
@@ -23,62 +23,69 @@ def display_animated_ticker():
         "GC=F": "OR"
     }
     
-    # Récupération des données
-    ticker_data = yf.download(list(indices.keys()), period="2d", progress=False)['Close']
-    
-    ticker_items = ""
-    for ticker, name in indices.items():
-        try:
-            current = ticker_data[ticker].iloc[-1]
-            prev = ticker_data[ticker].iloc[-2]
-            var = ((current - prev) / prev) * 100
-            color = "#00ff00" if var >= 0 else "#ff4b4b"
-            icon = "▲" if var >= 0 else "▼"
-            
-            # Construction de la chaîne HTML pour chaque indice avec espacement important
-            ticker_items += f"&nbsp;&nbsp;&nbsp;&nbsp; **{name}** {current:,.2f} <span style='color:{color};'>{icon} {var:.2f}%</span> &nbsp;&nbsp;&nbsp;&nbsp; |"
-        except:
-            continue
+    try:
+        # Récupération sur 5 jours pour garantir des données valides (évite les NaN du week-end)
+        ticker_data = yf.download(list(indices.keys()), period="5d", progress=False)['Close']
+        ticker_data = ticker_data.ffill()
+        
+        ticker_items = ""
+        for ticker, name in indices.items():
+            series = ticker_data[ticker].dropna()
+            if len(series) >= 2:
+                current = series.iloc[-1]
+                prev = series.iloc[-2]
+                var = ((current - prev) / prev) * 100
+                color = "#00ff00" if var >= 0 else "#ff4b4b"
+                icon = "▲" if var >= 0 else "▼"
+                sign = "+" if var >= 0 else ""
+                
+                # Utilisation de <b> pour le gras (évite l'affichage des astérisques en HTML)
+                ticker_items += f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <b>{name}</b> {current:,.2f} <span style='color:{color};'>{icon} {sign}{var:.2f}%</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |"
 
-    # Injection CSS pour l'animation de défilement
-    st.markdown(f"""
-        <style>
-        @keyframes marquee {{
-            0% {{ transform: translateX(100%); }}
-            100% {{ transform: translateX(-100%); }}
-        }}
-        .ticker-wrap {{
-            width: 100%;
-            overflow: hidden;
-            background-color: #0e1117;
-            padding: 10px 0;
-            border-bottom: 1px solid #31333f;
-            white-space: nowrap;
-        }}
-        .ticker-move {{
-            display: inline-block;
-            white-space: nowrap;
-            padding-left: 100%;
-            animation: marquee 30s linear infinite;
-            font-family: 'Courier New', Courier, monospace;
-            font-size: 1.1rem;
-        }}
-        .ticker-move:hover {{
-            animation-play-state: paused;
-        }}
-        </style>
-        <div class="ticker-wrap">
-            <div class="ticker-move">
-                {ticker_items} {ticker_items} 
+        # Contenu triplé pour une boucle infinie sans saut
+        full_content = (ticker_items * 3) if ticker_items else "Chargement des données marchés..."
+
+        st.markdown(f"""
+            <style>
+            @keyframes marquee {{
+                0% {{ transform: translateX(0); }}
+                100% {{ transform: translateX(-50%); }}
+            }}
+            .ticker-wrap {{
+                width: 100%;
+                overflow: hidden;
+                background-color: #0e1117;
+                padding: 12px 0;
+                border-bottom: 2px solid #31333f;
+                white-space: nowrap;
+            }}
+            .ticker-move {{
+                display: inline-block;
+                white-space: nowrap;
+                animation: marquee 100s linear infinite; /* Ralenti à 100s */
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                font-size: 1.1rem;
+                color: white;
+            }}
+            .ticker-move:hover {{
+                animation-play-state: paused;
+                cursor: pointer;
+            }}
+            </style>
+            <div class="ticker-wrap">
+                <div class="ticker-move">
+                    {full_content}
+                </div>
             </div>
-        </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"Erreur flux : {e}")
 
-# Affichage du bandeau
+# Lancement du bandeau
 display_animated_ticker()
 st.title("THE FRENCH BUILT TOOL FOR STRATEGIC INVESTING")
 
-# --- RÉCUPÉRATION DES TICKERS (Base de données) ---
+# --- RÉCUPÉRATION DES TICKERS (WIKIPEDIA + FALLBACK) ---
 @st.cache_data
 def get_european_base_list():
     try:
@@ -101,13 +108,12 @@ BASE_LIST = get_european_base_list()
 # --- BARRE LATÉRALE ---
 with st.sidebar:
     st.header("🧭 Navigation")
-    app_mode = st.radio("Choisir l'outil :", ["Projection Monte Carlo", "Optimisation & Frontière Efficiente"])
+    app_mode = st.radio("Outil :", ["Projection Monte Carlo", "Optimisation & Frontière Efficiente"])
     
     st.divider()
     st.header("🛒 Portefeuille")
     
-    safe_default = [BASE_LIST[0]] if "AIR.PA" not in BASE_LIST else ["AIR.PA"]
-    selected_tickers = st.multiselect("Sélectionner dans les indices :", options=BASE_LIST, default=safe_default)
+    selected_tickers = st.multiselect("Sélectionner :", options=BASE_LIST, default=[BASE_LIST[0]])
     
     manual_t = st.text_input("Ajout manuel (ex: PUST.PA) :").upper()
     if 'manual_list' not in st.session_state: st.session_state.manual_list = []
@@ -124,16 +130,7 @@ with st.sidebar:
     st.divider()
     if app_mode == "Projection Monte Carlo":
         model_type = st.radio("Modèle :", ["FHS (Historique)", "Student-t", "GARCH(1,1)"])
-        
-        # --- INFOS BULLES ---
-        if model_type == "FHS (Historique)":
-            st.info("**FHS :** Utilise les rendements réels. ✅ Capture les queues de distribution réelles.")
-        elif model_type == "Student-t":
-            st.info("**Student-t :** Idéal pour simuler des 'Black Swans'. ✅ Paramètre Nu gère l'épaisseur des queues.")
-        elif model_type == "GARCH(1,1)":
-            st.info("**GARCH(1,1) :** Volatilité qui réagit aux chocs. ✅ Modélise le regroupement de la peur.")
-
-        start_mc = st.date_input("Analyser l'historique depuis le :", datetime.date(2021, 1, 1), key="date_mc")
+        start_mc = st.date_input("Analyser depuis le :", datetime.date(2021, 1, 1), key="date_mc")
         nu_val = st.slider("nu (v)", 3, 50, 5) if model_type == "Student-t" else 5
         n_days = st.number_input("Horizon (jours)", value=150)
         n_sims = st.number_input("Simulations", value=2000)
@@ -143,7 +140,7 @@ with st.sidebar:
         rf_rate = st.number_input("Taux sans risque (%)", value=3.0) / 100
         run_btn = st.button("🎯 GÉNÉRER LA FRONTIÈRE")
 
-# --- CHARGEMENT DES DONNÉES ---
+# --- CHARGEMENT ---
 @st.cache_data
 def load_data_portfolio(tickers):
     df = yf.download(tickers + ["^GSPC"], start="2018-01-01")['Close']
@@ -154,6 +151,7 @@ raw_data = load_data_portfolio(final_list)
 # --- MODE MONTE CARLO ---
 if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
     data_filtered = raw_data[raw_data.index >= pd.Timestamp(start_mc)][final_list]
+    # Calcul des rendements logarithmiques (plus stables pour les simulations)
     returns = np.log(data_filtered / data_filtered.shift(1)).dropna()
     last_prices = data_filtered.iloc[-1]
     total_val = sum(last_prices[t] * shares_dict[t] for t in final_list)
@@ -178,7 +176,7 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
         elif model_type == "Student-t":
             t_samples = np.random.standard_t(df=nu_val, size=(n_sims, len(final_list)))
             shocks = (t_samples @ L.T) * np.sqrt((nu_val - 2) / nu_val)
-        else: # GARCH
+        else:
             shocks = np.random.normal(0, 1, size=(n_sims, len(final_list)))
 
         daily_ret = shocks * sim_vols
@@ -193,23 +191,23 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
     portfolio_paths = np.sum(price_paths * [shares_dict[t] for t in final_list], axis=2)
     final_pnl = portfolio_paths[-1, :] - total_val
     
-    st.columns(3)[1].metric(f"Issue Médiane", f"{np.median(final_pnl):,.2f} €", f"{(np.median(final_pnl)/total_val)*100:.2f} %")
+    st.metric("Issue Médiane", f"{np.median(final_pnl):,.2f} €", f"{(np.median(final_pnl)/total_val)*100:.2f} %")
+    st.line_chart(portfolio_paths[:, :100])
 
-    fig = plt.figure(figsize=(16, 7), facecolor='none')
-    gs = GridSpec(1, 2, width_ratios=[1.8, 1])
-    plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
-    ax1 = fig.add_subplot(gs[0], facecolor='none')
-    norm = plt.Normalize(final_pnl.min(), final_pnl.max())
-    for i in np.random.choice(n_sims, 100):
-        ax1.plot(portfolio_paths[:, i], color=plt.cm.RdYlGn(norm(final_pnl[i])), alpha=0.3)
-    ax1.set_title(f"Simulation {model_type}")
-    
-    ax2 = fig.add_subplot(gs[1], facecolor='none')
-    n, bins, patches = ax2.hist(final_pnl, bins=50, density=True, alpha=0.8)
-    for b, p in zip(bins, patches): p.set_facecolor('red' if b < 0 else 'green')
-    st.pyplot(fig, transparent=True)
-
-# --- MODE OPTIMISATION (Identique) ---
+# --- MODE OPTIMISATION ---
 elif app_mode == "Optimisation & Frontière Efficiente":
-    # (Le reste du code d'optimisation reste identique au précédent pour la cohérence)
-    st.info("Utilisez les réglages dans la barre latérale pour générer la frontière efficiente.")
+    data_opt = raw_data[final_list]
+    if run_btn:
+        ret_opt = data_opt[data_opt.index >= pd.Timestamp(start_opt)].pct_change().dropna()
+        mean_ret, cov_mat = ret_opt.mean() * 252, ret_opt.cov() * 252
+        
+        results = []
+        for _ in range(3000):
+            w = np.random.random(len(final_list)); w /= np.sum(w)
+            r = np.sum(mean_ret * w)
+            v = np.sqrt(w.T @ cov_mat @ w)
+            results.append([r, v, (r - rf_rate) / v, w])
+        
+        df_res = pd.DataFrame(results, columns=['ret', 'vol', 'sharpe', 'weights'])
+        st.write("### Frontière Efficiente")
+        st.scatter_chart(df_res, x='vol', y='ret', color='sharpe')
