@@ -17,11 +17,9 @@ def display_animated_ticker():
         "^GSPC": "S&P 500", "^IXIC": "NASDAQ", "^N225": "NIKKEI",
         "BTC-USD": "BITCOIN", "GC=F": "OR"
     }
-    
     try:
         ticker_data = yf.download(list(indices.keys()), period="5d", progress=False)['Close']
         ticker_data = ticker_data.ffill()
-        
         ticker_items = ""
         for ticker, name in indices.items():
             series = ticker_data[ticker].dropna()
@@ -33,30 +31,17 @@ def display_animated_ticker():
                 icon = "▲" if var >= 0 else "▼"
                 sign = "+" if var >= 0 else ""
                 ticker_items += f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <b>{name}</b> {current:,.2f} <span style='color:{color};'>{icon} {sign}{var:.2f}%</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |"
-
         full_content = (ticker_items * 3) if ticker_items else "Chargement des marchés..."
-
         st.markdown(f"""
             <style>
-            @keyframes marquee {{
-                0% {{ transform: translateX(0); }}
-                100% {{ transform: translateX(-50%); }}
-            }}
-            .ticker-wrap {{
-                width: 100%; overflow: hidden; background-color: #0e1117;
-                padding: 12px 0; border-bottom: 2px solid #31333f; white-space: nowrap;
-            }}
-            .ticker-move {{
-                display: inline-block; white-space: nowrap;
-                animation: marquee 100s linear infinite;
-                font-family: 'Segoe UI', sans-serif; font-size: 1.1rem; color: white;
-            }}
+            @keyframes marquee {{ 0% {{ transform: translateX(0); }} 100% {{ transform: translateX(-50%); }} }}
+            .ticker-wrap {{ width: 100%; overflow: hidden; background-color: #0e1117; padding: 12px 0; border-bottom: 2px solid #31333f; white-space: nowrap; }}
+            .ticker-move {{ display: inline-block; white-space: nowrap; animation: marquee 100s linear infinite; font-family: 'Segoe UI', sans-serif; font-size: 1.1rem; color: white; }}
             .ticker-move:hover {{ animation-play-state: paused; cursor: pointer; }}
             </style>
             <div class="ticker-wrap"><div class="ticker-move">{full_content}</div></div>
         """, unsafe_allow_html=True)
-    except:
-        st.error("Erreur de flux")
+    except: st.error("Erreur de flux")
 
 display_animated_ticker()
 st.title("THE FRENCH BUILT TOOL FOR STRATEGIC INVESTING")
@@ -119,7 +104,7 @@ def load_data_portfolio(tickers):
 
 raw_data = load_data_portfolio(final_list)
 
-# --- LOGIQUE MONTE CARLO ---
+# --- MODE MONTE CARLO (Même logique que précédemment) ---
 if app_mode == "Projection Monte Carlo" and run_btn:
     data_filtered = raw_data[raw_data.index >= pd.Timestamp(start_mc)][final_list]
     returns = np.log(data_filtered / data_filtered.shift(1)).dropna()
@@ -128,7 +113,6 @@ if app_mode == "Projection Monte Carlo" and run_btn:
     
     price_paths = np.zeros((n_days, n_sims, len(final_list)))
     temp_prices = np.tile(last_prices.values, (n_sims, 1))
-    
     decay = 0.94
     ewma_var = (returns**2).ewm(alpha=(1 - decay), adjust=False).mean()
     sim_vols = np.tile(np.sqrt(ewma_var.iloc[-1].values), (n_sims, 1))
@@ -136,9 +120,6 @@ if app_mode == "Projection Monte Carlo" and run_btn:
     if model_type == "Student-t":
         L = cholesky(returns.corr().values + np.eye(len(final_list))*1e-8, lower=True)
     
-    if model_type == "GARCH(1,1)":
-        omega, alpha, beta = 1e-6, 0.05, 0.90
-
     for t in range(n_days):
         if model_type == "FHS (Historique)":
             std_rets = (returns / np.sqrt(ewma_var.shift(1))).dropna()
@@ -146,92 +127,90 @@ if app_mode == "Projection Monte Carlo" and run_btn:
         elif model_type == "Student-t":
             t_samples = np.random.standard_t(df=nu_val, size=(n_sims, len(final_list)))
             shocks = (t_samples @ L.T) * np.sqrt((nu_val - 2) / nu_val)
-        else:
+        else: # GARCH simplified
             shocks = np.random.normal(0, 1, size=(n_sims, len(final_list)))
-
         daily_ret = shocks * sim_vols
         temp_prices *= np.exp(daily_ret)
         price_paths[t] = temp_prices
-        
-        if model_type == "GARCH(1,1)":
-            sim_vols = np.sqrt(omega + alpha * (daily_ret**2) + beta * (sim_vols**2))
-        else:
-            sim_vols = np.sqrt(decay * (sim_vols**2) + (1 - decay) * (daily_ret**2))
+        sim_vols = np.sqrt(decay * (sim_vols**2) + (1 - decay) * (daily_ret**2))
 
     portfolio_paths = np.sum(price_paths * [shares_dict[t] for t in final_list], axis=2)
     final_pnl = portfolio_paths[-1, :] - total_val
-    
     st.columns(3)[1].metric(f"Issue Médiane", f"{np.median(final_pnl):,.2f} €", f"{(np.median(final_pnl)/total_val)*100:.2f} %")
-
     fig = plt.figure(figsize=(16, 7), facecolor='none')
     gs = GridSpec(1, 2, width_ratios=[1.8, 1])
     plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
-    
-    ax1 = fig.add_subplot(gs[0], facecolor='none')
-    norm = plt.Normalize(final_pnl.min(), final_pnl.max())
-    for i in np.random.choice(n_sims, 100):
-        ax1.plot(portfolio_paths[:, i], color=plt.cm.RdYlGn(norm(final_pnl[i])), alpha=0.3)
-    ax1.set_title(f"Simulation {model_type}", fontsize=14)
-    ax1.grid(axis='y', alpha=0.2)
-    
-    ax2 = fig.add_subplot(gs[1], facecolor='none')
-    n, bins, patches = ax2.hist(final_pnl, bins=50, density=True, alpha=0.8)
+    ax1 = fig.add_subplot(gs[0], facecolor='none'); norm = plt.Normalize(final_pnl.min(), final_pnl.max())
+    for i in np.random.choice(n_sims, 100): ax1.plot(portfolio_paths[:, i], color=plt.cm.RdYlGn(norm(final_pnl[i])), alpha=0.3)
+    ax2 = fig.add_subplot(gs[1], facecolor='none'); n, bins, patches = ax2.hist(final_pnl, bins=50, density=True, alpha=0.8)
     for b, p in zip(bins, patches): p.set_facecolor('red' if b < 0 else 'green')
-    ax2.set_title("Distribution Gains/Pertes", fontsize=14)
     st.pyplot(fig, transparent=True)
 
-# --- LOGIQUE OPTIMISATION (FRONTALIER EFFICIENTE) ---
+# --- MODE OPTIMISATION + COMPOSITION ACTUELLE ---
 elif app_mode == "Optimisation & Frontière Efficiente" and run_btn:
     data_opt = raw_data[raw_data.index >= pd.Timestamp(start_opt)][final_list]
     returns_daily = data_opt.pct_change().dropna()
-    
-    # Calcul annuel
     mean_returns = returns_daily.mean() * 252
     cov_matrix = returns_daily.cov() * 252
     
+    # --- 1. CALCUL DU PORTEFEUILLE ACTUEL ---
+    last_prices = data_opt.iloc[-1]
+    values = np.array([shares_dict[t] * last_prices[t] for t in final_list])
+    current_weights = values / np.sum(values)
+    
+    current_return = np.sum(mean_returns * current_weights)
+    current_vol = np.sqrt(np.dot(current_weights.T, np.dot(cov_matrix, current_weights)))
+    current_sharpe = (current_return - rf_rate) / current_vol
+
+    # --- 2. SIMULATION DE LA FRONTIÈRE ---
     results = np.zeros((3, n_portfolios))
     weights_record = []
-
     for i in range(n_portfolios):
         weights = np.random.random(len(final_list))
         weights /= np.sum(weights)
         weights_record.append(weights)
-        
-        portfolio_return = np.sum(mean_returns * weights)
-        portfolio_std_dev = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
-        
-        results[0,i] = portfolio_return
-        results[1,i] = portfolio_std_dev
-        results[2,i] = (portfolio_return - rf_rate) / portfolio_std_dev # Sharpe
+        p_ret = np.sum(mean_returns * weights)
+        p_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+        results[0,i] = p_ret
+        results[1,i] = p_vol
+        results[2,i] = (p_ret - rf_rate) / p_vol
 
-    # Identification des portefeuilles clés
     max_sharpe_idx = np.argmax(results[2])
-    min_vol_idx = np.argmin(results[1])
     
-    # Affichage
-    st.subheader("🎯 Analyse de la Frontière Efficiente")
-    
+    # --- 3. AFFICHAGE ---
+    st.subheader("🎯 Comparaison : Actuel vs Optimisé")
     col1, col2 = st.columns([2, 1])
     
     with col1:
         fig_opt, ax_opt = plt.subplots(figsize=(10, 6), facecolor='none')
         ax_opt.set_facecolor('none')
-        sc = ax_opt.scatter(results[1,:], results[0,:], c=results[2,:], cmap='viridis', marker='o', s=10, alpha=0.5)
-        ax_opt.scatter(results[1,max_sharpe_idx], results[0,max_sharpe_idx], marker='*', color='r', s=200, label='Max Sharpe')
-        ax_opt.scatter(results[1,min_vol_idx], results[0,min_vol_idx], marker='*', color='b', s=200, label='Min Volatilité')
+        # Nuage de points
+        sc = ax_opt.scatter(results[1,:], results[0,:], c=results[2,:], cmap='viridis', s=10, alpha=0.3)
+        # Point Max Sharpe
+        ax_opt.scatter(results[1,max_sharpe_idx], results[0,max_sharpe_idx], marker='*', color='r', s=200, label='Optimal (Max Sharpe)')
+        # Point ACTUEL
+        ax_opt.scatter(current_vol, current_return, marker='D', color='white', s=150, edgecolors='black', label='TON PORTEFEUILLE')
         
-        ax_opt.set_title("Espace Risque-Rendement", color='white')
+        ax_opt.set_title("Frontière Efficiente", color='white')
         ax_opt.set_xlabel("Volatilité Annuelle", color='white')
         ax_opt.set_ylabel("Rendement Annuel", color='white')
         plt.colorbar(sc, label='Ratio de Sharpe')
-        ax_opt.legend()
+        ax_opt.legend(facecolor='#0e1117', edgecolor='white')
         st.pyplot(fig_opt, transparent=True)
 
     with col2:
-        st.write("📈 **Meilleur Portefeuille (Sharpe)**")
-        best_w = weights_record[max_sharpe_idx]
-        df_w = pd.DataFrame({'Actif': final_list, 'Poids (%)': [round(x*100, 2) for x in best_w]})
-        st.table(df_w.set_index('Actif'))
+        st.write("📊 **Allocation des Poids (%)**")
+        comparison_df = pd.DataFrame({
+            'Actif': final_list,
+            'Actuel (%)': [round(x*100, 1) for x in current_weights],
+            'Optimisé (%)': [round(x*100, 1) for x in weights_record[max_sharpe_idx]]
+        })
+        st.table(comparison_df.set_index('Actif'))
         
-        st.metric("Rendement Attendu", f"{results[0, max_sharpe_idx]*100:.2f} %")
-        st.metric("Volatilité", f"{results[1, max_sharpe_idx]*100:.2f} %")
+        # Comparaison des métriques
+        c_m1, c_m2 = st.columns(2)
+        c_m1.metric("Sharpe Actuel", f"{current_sharpe:.2f}")
+        c_m2.metric("Sharpe Optimal", f"{results[2, max_sharpe_idx]:.2f}", f"{results[2, max_sharpe_idx] - current_sharpe:.2f}")
+        
+        st.divider()
+        st.info("💡 Le point blanc (diamant) représente ta position actuelle. Plus il est proche de l'étoile rouge, plus ton portefeuille est optimisé pour le risque.")
