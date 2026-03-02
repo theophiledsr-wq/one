@@ -10,54 +10,6 @@ from scipy.linalg import cholesky
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="European Portfolio Master Pro", layout="wide")
 
-# --- BANDEAU DES INDICES MONDIAUX ---
-def display_market_ticker():
-    # Liste des indices majeurs
-    indices = {
-        "^FCHI": "CAC 40",
-        "^GDAXI": "DAX 40",
-        "^STOXX50E": "EURO STOXX 50",
-        "^GSPC": "S&P 500",
-        "^IXIC": "NASDAQ",
-        "^N225": "NIKKEI 225"
-    }
-    
-    # Téléchargement des données récentes (2 jours pour calculer la variation)
-    ticker_data = yf.download(list(indices.keys()), period="2d", progress=False)['Close']
-    
-    # Création du bandeau avec des colonnes
-    cols = st.columns(len(indices))
-    
-    for i, (ticker, name) in enumerate(indices.items()):
-        try:
-            current_price = ticker_data[ticker].iloc[-1]
-            prev_price = ticker_data[ticker].iloc[-2]
-            variation = ((current_price - prev_price) / prev_price) * 100
-            
-            color = "green" if variation >= 0 else "red"
-            sign = "+" if variation >= 0 else ""
-            
-            with cols[i]:
-                st.markdown(
-                    f"""
-                    <div style="text-align: center; border-right: 1px solid #444;">
-                        <p style="margin-bottom: 0; font-size: 0.8rem; color: #aaa;">{name}</p>
-                        <p style="margin-top: 0; font-weight: bold; font-size: 1rem;">
-                            {current_price:,.2f} 
-                            <span style="color: {color}; font-size: 0.9rem;">
-                                {sign}{variation:.2f}%
-                            </span>
-                        </p>
-                    </div>
-                    """, 
-                    unsafe_allow_html=True
-                )
-        except:
-            continue
-
-# Affichage du bandeau tout en haut
-display_market_ticker()
-st.divider()
 
 st.title("THE FRENCH BUILT TOOL FOR STRATEGIC INVESTING")
 
