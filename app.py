@@ -80,7 +80,7 @@ def display_market_ticker():
 
 # Affichage immédiat du bandeau
 display_market_ticker()
-st.title("OUTIL D'EVALUATION DE PROETFEUILLE POUR L'INVESTISSEUR EUROPEEN")
+st.title("OUTIL D'ÉVALUATION DE PORTEFEUILLE POUR L'INVESTISSEUR EUROPÉEN")
 
 # --- RÉCUPÉRATION DES TICKERS ---
 @st.cache_data
