@@ -56,49 +56,58 @@ with st.sidebar:
 
     st.divider()
     if app_mode == "Projection Monte Carlo":
-        # AJOUT DES INFOS BULLES (POINT D'EXCLAMATION)
         model_type = st.radio("Modèle :", ["FHS (Historique)", "Student-t", "GARCH(1,1)"])
         
+        # --- INFOS BULLES ---
         if model_type == "FHS (Historique)":
-            st.info("**FHS :** Utilise les rendements réels du passé. \n\n ✅ *Avantage :* Capture la forme réelle des krachs. \n\n ❌ *Inconvénient :* Limité par l'histoire passée.")
+            st.info("**FHS :** Utilise les rendements réels du passé.")
         elif model_type == "Student-t":
-            st.info("**Student-t :** Modèle mathématique à queues épaisses. \n\n ✅ *Avantage :* Simule des scénarios extrêmes hors-norme. \n\n ❌ *Inconvénient :* Calibration du paramètre Nu (v) complexe.")
+            st.info("**Student-t :** Modèle à queues épaisses pour simuler les krachs.")
         elif model_type == "GARCH(1,1)":
-            st.info("**GARCH(1,1) :** Volatilité dynamique. \n\n ✅ *Avantage :* S'adapte au 'Volatility Clustering' (la peur engendre la peur). \n\n ❌ *Inconvénient :* Plus lourd en calcul.")
+            st.info("**GARCH(1,1) :** Volatilité dynamique auto-adaptative.")
 
+        # NOUVEAU : Sélecteur de date pour Student-t et GARCH
+        start_mc = st.date_input("Analyser l'historique depuis le :", datetime.date(2021, 1, 1), key="date_mc")
+        
         nu_val = st.slider("nu (v)", 3, 50, 5) if model_type == "Student-t" else 5
         n_days = st.number_input("Horizon (jours)", value=150)
         n_sims = st.number_input("Simulations", value=2000)
         run_btn = st.button("🚀 LANCER LA SIMULATION")
     else:
-        start_opt = st.date_input("Analyse depuis le", datetime.date(2021, 1, 1))
+        start_opt = st.date_input("Analyse depuis le", datetime.date(2021, 1, 1), key="date_opt")
         rf_rate = st.number_input("Taux sans risque (%)", value=3.0) / 100
         run_btn = st.button("🎯 GÉNÉRER LA FRONTIÈRE")
 
 # --- CHARGEMENT ---
 @st.cache_data
 def load_data(tickers, start_date):
-    df = yf.download(tickers + ["^GSPC"], start=start_date)['Close']
+    # On télécharge depuis 2019 par défaut pour avoir assez de recul, 
+    # mais on filtrera ensuite selon le sélecteur de l'utilisateur
+    df = yf.download(tickers + ["^GSPC"], start="2018-01-01")['Close']
     return df.ffill().dropna()
 
-raw_data = load_data(final_list, "2019-01-01")
-data = raw_data[final_list]
-last_prices = data.iloc[-1]
-total_val = sum(last_prices[t] * shares_dict[t] for t in final_list)
-current_weights = np.array([(last_prices[t] * shares_dict[t]) / total_val for t in final_list])
+raw_data = load_data(final_list, "2018-01-01")
 
 # --- LOGIQUE MONTE CARLO ---
 if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
-    vol_date = data.index[-1].date()
-    st.info(f"⚡ Analyse au : {vol_date}")
+    # Filtrage selon la date choisie par l'utilisateur
+    data_filtered = raw_data[raw_data.index >= pd.Timestamp(start_mc)][final_list]
     
-    returns = np.log(data / data.shift(1)).dropna()
+    if data_filtered.empty:
+        st.error("Pas de données pour cette période.")
+        st.stop()
+
+    vol_date = data_filtered.index[-1].date()
+    st.info(f"⚡ Calibration basée sur l'historique du {start_mc} au {vol_date}")
     
-    # Paramètres par défaut
+    returns = np.log(data_filtered / data_filtered.shift(1)).dropna()
+    last_prices = data_filtered.iloc[-1]
+    total_val = sum(last_prices[t] * shares_dict[t] for t in final_list)
+    
+    # Init sim
     price_paths = np.zeros((n_days, n_sims, len(final_list)))
     temp_prices = np.tile(last_prices.values, (n_sims, 1))
     
-    # Initialisation de la volatilité (EWMA pour FHS/Student, GARCH spécifique sinon)
     decay = 0.94
     ewma_var = (returns**2).ewm(alpha=(1 - decay), adjust=False).mean()
     sim_vols = np.tile(np.sqrt(ewma_var.iloc[-1].values), (n_sims, 1))
@@ -106,14 +115,8 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
     if model_type == "Student-t":
         L = cholesky(returns.corr().values + np.eye(len(final_list))*1e-8, lower=True)
     
-    # --- LOGIQUE GARCH(1,1) ---
     if model_type == "GARCH(1,1)":
-        # Paramètres standards calibrés sur actions (Persistence élevée)
-        omega = 1e-6
-        alpha = 0.05
-        beta = 0.90
-        # On remplace sim_vols par la volatilité GARCH de départ
-        sim_vols = np.tile(np.sqrt(ewma_var.iloc[-1].values), (n_sims, 1))
+        omega, alpha, beta = 1e-6, 0.05, 0.90
 
     for t in range(n_days):
         if model_type == "FHS (Historique)":
@@ -122,16 +125,14 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
         elif model_type == "Student-t":
             t_samples = np.random.standard_t(df=nu_val, size=(n_sims, len(final_list)))
             shocks = (t_samples @ L.T) * np.sqrt((nu_val - 2) / nu_val)
-        else: # GARCH (Utilise Shocks Normaux + Variance récursive)
+        else:
             shocks = np.random.normal(0, 1, size=(n_sims, len(final_list)))
 
         daily_ret = shocks * sim_vols
         temp_prices *= np.exp(daily_ret)
         price_paths[t] = temp_prices
         
-        # Update Volatilité
         if model_type == "GARCH(1,1)":
-            # Formule GARCH(1,1) : sigma^2 = omega + alpha*epsilon^2 + beta*sigma^2
             sim_vols = np.sqrt(omega + alpha * (daily_ret**2) + beta * (sim_vols**2))
         else:
             sim_vols = np.sqrt(decay * (sim_vols**2) + (1 - decay) * (daily_ret**2))
@@ -141,24 +142,25 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
     
     st.columns(3)[1].metric(f"Issue Médiane", f"{np.median(final_pnl):,.2f} €", f"{(np.median(final_pnl)/total_val)*100:.2f} %")
 
+    # Graphiques (Identiques à précédemment)
     fig = plt.figure(figsize=(16, 7), facecolor='none')
     gs = GridSpec(1, 2, width_ratios=[1.8, 1])
     plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
-    
     ax1 = fig.add_subplot(gs[0], facecolor='none')
     norm = plt.Normalize(final_pnl.min(), final_pnl.max())
     for i in np.random.choice(n_sims, 100):
         ax1.plot(portfolio_paths[:, i], color=plt.cm.RdYlGn(norm(final_pnl[i])), alpha=0.3)
-    ax1.set_title(f"Simulation {model_type}")
-    
     ax2 = fig.add_subplot(gs[1], facecolor='none')
     n, bins, patches = ax2.hist(final_pnl, bins=50, density=True, alpha=0.8)
     for b, p in zip(bins, patches): p.set_facecolor('red' if b < 0 else 'green')
-    ax2.axvline(0, color='white', lw=1, ls='--')
     st.pyplot(fig, transparent=True)
 
 # --- MODE 2 : OPTIMISATION ---
 elif app_mode == "Optimisation & Frontière Efficiente":
+    data_opt = raw_data[final_list]
+    last_prices = data_opt.iloc[-1]
+    current_weights = np.array([(last_prices[t] * shares_dict[t]) / sum(last_prices[x]*shares_dict[x] for x in final_list) for t in final_list])
+    
     st.subheader("📊 Composition Actuelle")
     c_pie, c_tab = st.columns([1, 1.5])
     with c_pie:
@@ -169,7 +171,8 @@ elif app_mode == "Optimisation & Frontière Efficiente":
         st.table(pd.DataFrame({"Actif": final_list, "Poids": [f"{w*100:.1f}%" for w in current_weights]}))
 
     if run_btn:
-        ret_opt = data[data.index >= pd.Timestamp(start_opt)].pct_change().dropna()
+        ret_opt = data_opt[data_opt.index >= pd.Timestamp(start_opt)].pct_change().dropna()
+        # ... (reste du code d'optimisation inchangé)
         mean_ret = ret_opt.mean() * 252
         cov_mat = ret_opt.cov() * 252
         sp_ret = raw_data["^GSPC"][raw_data.index >= pd.Timestamp(start_opt)].pct_change().dropna()
@@ -188,16 +191,12 @@ elif app_mode == "Optimisation & Frontière Efficiente":
             res.append([r, v, (r-rf_rate)/v, (r-rf_rate)/downside if downside!=0 else 0, r/mdd if mdd!=0 else 0, w])
 
         df_res = pd.DataFrame(res, columns=['ret', 'vol', 'sharpe', 'sortino', 'calmar', 'weights'])
-        
         fig_ef, ax_ef = plt.subplots(figsize=(12, 7), facecolor='none')
         sc = ax_ef.scatter(df_res['vol'], df_res['ret'], c=df_res['sharpe'], cmap='RdYlGn', alpha=0.3)
-        
-        # Marqueurs
         pts = {"Sharpe": ("gold", "*", 300), "Sortino": ("orange", "D", 150), "Calmar": ("magenta", "P", 150)}
         for label, (color, marker, size) in pts.items():
             best = df_res.iloc[df_res[label.lower()].idxmax()]
             ax_ef.scatter(best['vol'], best['ret'], color=color, marker=marker, s=size, label=f'MAX {label}', edgecolors='black')
-        
         ax_ef.scatter(sp_stats[0], sp_stats[1], color='blue', marker='s', s=100, label='S&P 500')
         ax_ef.legend(loc='upper left', bbox_to_anchor=(1.15, 1), facecolor='#262730')
         st.pyplot(fig_ef, transparent=True)
