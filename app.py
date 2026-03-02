@@ -10,7 +10,7 @@ import datetime
 st.set_page_config(page_title="European Monte Carlo Pro", layout="wide")
 
 # --- TITRE ---
-st.title("THE FRENCH BUILT TOOL FOR MONTE CARLO PROJECTION FOR THE EUROPEAN INVESTOR")
+st.title("L'OUTIL MONTE CARLO POUR L'INVESTISSEUR FRANÇAIS")
 
 # --- RÉCUPÉRATION DES TICKERS (Indices Majeurs) ---
 @st.cache_data
