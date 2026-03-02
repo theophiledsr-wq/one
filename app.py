@@ -8,7 +8,7 @@ import datetime
 from scipy.linalg import cholesky
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="European Portfolio Master Pro", layout="wide")
+st.set_page_config(page_title="Monte Carlo & Frontière Efficiente", layout="wide")
 
 # --- BANDEAU ANIMÉ (FUSION : ANIMATION + FIX NaN) ---
 def display_market_ticker():
@@ -80,7 +80,7 @@ def display_market_ticker():
 
 # Affichage immédiat du bandeau
 display_market_ticker()
-st.title("THE FRENCH BUILT TOOL FOR STRATEGIC INVESTING")
+st.title("OUTIL D'EVALUATION DE PROETFEUILLE POUR L'INVESTISSEUR EUROPEEN")
 
 # --- RÉCUPÉRATION DES TICKERS ---
 @st.cache_data
