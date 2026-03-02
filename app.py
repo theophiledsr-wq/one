@@ -15,7 +15,6 @@ st.title("THE FRENCH BUILT TOOL FOR STRATEGIC INVESTING")
 @st.cache_data
 def get_european_base_list():
     try:
-        # Liste de secours robuste si le scraping Wikipédia échoue
         fallback = ["AIR.PA", "MC.PA", "OR.PA", "RMS.PA", "SAP.DE", "ASML.AS", "SIE.DE"]
         indices = {"CAC 40": "https://en.wikipedia.org/wiki/CAC_40", 
                    "DAX 40": "https://en.wikipedia.org/wiki/DAX"}
@@ -41,7 +40,6 @@ with st.sidebar:
     st.divider()
     st.header("🛒 Portefeuille")
     
-    # FIX ERREUR 1 : On vérifie que AIR.PA est bien dans la liste par défaut
     safe_default = [BASE_LIST[0]] if "AIR.PA" not in BASE_LIST else ["AIR.PA"]
     selected_tickers = st.multiselect("Sélectionner dans les indices :", options=BASE_LIST, default=safe_default)
     
@@ -77,20 +75,16 @@ with st.sidebar:
 def load_data(tickers, start_date):
     download_list = tickers + ["^GSPC"]
     df = yf.download(download_list, start=start_date)['Close']
-    # FIX ERREUR 2 : Gestion robuste Series vs DataFrame
-    if len(download_list) == 1:
-        df = df.to_frame(download_list[0])
-    elif isinstance(df, pd.Series):
+    if isinstance(df, pd.Series):
         df = df.to_frame()
     return df.ffill().dropna()
 
 raw_data = load_data(final_list, "2019-01-01")
 
 if raw_data.empty:
-    st.error("Impossible de récupérer les données. Vérifiez les tickers.")
+    st.error("Impossible de récupérer les données.")
     st.stop()
 
-# Séparation assets / benchmark
 sp500 = raw_data["^GSPC"]
 data = raw_data[final_list]
 last_prices = data.iloc[-1]
@@ -113,12 +107,15 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
     
     if model_type == "Student-t":
         corr = returns.corr().values
-        # Protection contre matrices non-définies positives
         L = cholesky(corr + np.eye(len(final_list)) * 1e-8, lower=True)
+
+    # Pré-calcul des shocks standardisés pour FHS pour éviter l'erreur de sample
+    if model_type == "FHS (Historique)":
+        std_returns = (returns / np.sqrt(ewma_var.shift(1))).dropna()
 
     for t in range(n_days):
         if model_type == "FHS (Historique)":
-            shocks = (returns.sample(n_sims, replace=True).values / np.sqrt(ewma_var.sample(n_sims).values))
+            shocks = std_returns.sample(n_sims, replace=True).values
         else:
             t_samples = np.random.standard_t(df=nu_val, size=(n_sims, len(final_list)))
             shocks = (t_samples @ L.T) * np.sqrt((nu_val - 2) / nu_val)
@@ -130,7 +127,13 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
 
     portfolio_paths = np.sum(price_paths * [shares_dict[t] for t in final_list], axis=2)
     final_pnl = portfolio_paths[-1, :] - total_val
+    
+    # Affichage Médiane
+    median_pnl = np.median(final_pnl)
+    median_pct = (median_pnl / total_val) * 100
+    st.columns(3)[1].metric(f"Issue Médiane ({model_type})", f"{median_pnl:,.2f} €", f"{median_pct:.2f} %")
 
+    # Graphiques
     fig = plt.figure(figsize=(16, 7), facecolor='none')
     gs = GridSpec(1, 2, width_ratios=[1.8, 1])
     plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
@@ -140,13 +143,12 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
     cmap = plt.cm.RdYlGn
     for i in np.random.choice(n_sims, 100):
         ax1.plot(portfolio_paths[:, i], color=cmap(norm(final_pnl[i])), alpha=0.3)
-    ax1.set_title("Simulation de Trajectoires", fontweight='bold')
+    ax1.set_title(f"Simulation {model_type}", fontweight='bold')
 
     ax2 = fig.add_subplot(gs[1], facecolor='none')
     n, bins, patches = ax2.hist(final_pnl, bins=50, density=True, alpha=0.8)
     for b, p in zip(bins, patches):
         p.set_facecolor('red' if b < 0 else 'green')
-    ax2.set_title("Répartition des Issues (Gains/Pertes)")
     ax2.axvline(0, color='white', lw=1, ls='--')
     st.pyplot(fig, transparent=True)
 
@@ -162,12 +164,9 @@ elif app_mode == "Optimisation & Frontière Efficiente":
         st.table(pd.DataFrame({"Actif": final_list, "Poids": [f"{w*100:.1f}%" for w in current_weights]}))
 
     if run_btn:
-        st.info(f"Analyse calculée sur la période : {start_opt} au {datetime.date.today()}")
         ret_opt = data[data.index >= pd.Timestamp(start_opt)].pct_change().dropna()
         mean_ret = ret_opt.mean() * 252
         cov_mat = ret_opt.cov() * 252
-        
-        # Benchmark S&P 500
         sp_ret = sp500[sp500.index >= pd.Timestamp(start_opt)].pct_change().dropna()
         sp_stats = [sp_ret.std() * np.sqrt(252), sp_ret.mean() * 252]
 
@@ -185,30 +184,30 @@ elif app_mode == "Optimisation & Frontière Efficiente":
 
         df_res = pd.DataFrame(res, columns=['ret', 'vol', 'sharpe', 'sortino', 'calmar', 'weights'])
         
-        # FIX ERREUR 3 : Légende décalée
+        # Plot
         fig_ef, ax_ef = plt.subplots(figsize=(12, 7), facecolor='none')
         sc = ax_ef.scatter(df_res['vol'], df_res['ret'], c=df_res['sharpe'], cmap='RdYlGn', alpha=0.3)
         
-        # Stratégies 100%
+        # Marqueurs spécifiques
+        best_sharpe = df_res.iloc[df_res['sharpe'].idxmax()]
+        best_sortino = df_res.iloc[df_res['sortino'].idxmax()]
+        best_calmar = df_res.iloc[df_res['calmar'].idxmax()]
+        
+        ax_ef.scatter(best_sharpe['vol'], best_sharpe['ret'], color='gold', marker='*', s=300, label='MAX SHARPE', edgecolors='black')
+        ax_ef.scatter(best_sortino['vol'], best_sortino['ret'], color='orange', marker='D', s=150, label='MAX SORTINO', edgecolors='black')
+        ax_ef.scatter(best_calmar['vol'], best_calmar['ret'], color='magenta', marker='P', s=150, label='MAX CALMAR', edgecolors='black')
+        
         for i, t in enumerate(final_list):
-            ax_ef.scatter(np.sqrt(cov_mat.iloc[i,i]), mean_ret[i], s=100, label=f"100% {t}", edgecolors='white')
+            ax_ef.scatter(np.sqrt(cov_mat.iloc[i,i]), mean_ret[i], s=80, label=f"100% {t}", alpha=0.6)
         
-        # Points Optimes
-        best_s = df_res.iloc[df_res['sharpe'].idxmax()]
-        ax_ef.scatter(best_s['vol'], best_s['ret'], color='gold', marker='*', s=300, label='MAX SHARPE', edgecolors='black')
-        
-        ax_ef.scatter(sp_stats[0], sp_stats[1], color='blue', marker='D', s=150, label='S&P 500')
-        
-        curr_v = np.sqrt(current_weights.T @ cov_mat @ current_weights)
-        curr_r = np.sum(mean_ret * current_weights)
-        ax_ef.scatter(curr_v, curr_r, color='white', marker='X', s=300, label='ACTUEL')
-
-        ax_ef.set_xlabel("Risque (Volatilité)")
-        ax_ef.set_ylabel("Rendement Annuel")
-        # On place la légende à l'extérieur pour éviter le chevauchement
+        ax_ef.scatter(sp_stats[0], sp_stats[1], color='blue', marker='s', s=100, label='S&P 500')
         ax_ef.legend(loc='upper left', bbox_to_anchor=(1.15, 1), facecolor='#262730')
-        plt.colorbar(sc, label='Ratio de Sharpe')
         st.pyplot(fig_ef, transparent=True)
         
-        st.subheader("📋 Répartition suggérée (Max Sharpe)")
-        st.write(pd.DataFrame({"Actif": final_list, "Allocation (%)": best_s['weights']*100}).style.format({"Allocation (%)": "{:.2f}%"}))
+        # Tableau récapitulatif
+        st.subheader("📋 Compositions des Portefeuilles Optimaux")
+        df_weights = pd.DataFrame({"Actif": final_list})
+        df_weights["Max Sharpe (%)"] = best_sharpe['weights'] * 100
+        df_weights["Max Sortino (%)"] = best_sortino['weights'] * 100
+        df_weights["Max Calmar (%)"] = best_calmar['weights'] * 100
+        st.write(df_weights.style.format({c: "{:.2f}%" for c in df_weights.columns if "%" in c}))
