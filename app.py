@@ -32,7 +32,6 @@ def display_animated_ticker():
                 color = "#00ff00" if var >= 0 else "#ff4b4b"
                 icon = "▲" if var >= 0 else "▼"
                 sign = "+" if var >= 0 else ""
-                # Utilisation de <b> pour le gras sans astérisques
                 ticker_items += f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <b>{name}</b> {current:,.2f} <span style='color:{color};'>{icon} {sign}{var:.2f}%</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |"
 
         full_content = (ticker_items * 3) if ticker_items else "Chargement des marchés..."
@@ -107,8 +106,9 @@ with st.sidebar:
         n_sims = st.number_input("Simulations", value=2000)
         run_btn = st.button("🚀 LANCER LA SIMULATION")
     else:
-        start_opt = st.date_input("Analyse depuis :", datetime.date(2021, 1, 1))
+        start_opt = st.date_input("Analyse depuis :", datetime.date(2020, 1, 1))
         rf_rate = st.number_input("Taux sans risque (%)", value=3.0) / 100
+        n_portfolios = st.number_input("Nombre de portefeuilles", value=5000)
         run_btn = st.button("🎯 GÉNÉRER LA FRONTIÈRE")
 
 # --- DATA ---
@@ -120,7 +120,7 @@ def load_data_portfolio(tickers):
 raw_data = load_data_portfolio(final_list)
 
 # --- LOGIQUE MONTE CARLO ---
-if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
+if app_mode == "Projection Monte Carlo" and run_btn:
     data_filtered = raw_data[raw_data.index >= pd.Timestamp(start_mc)][final_list]
     returns = np.log(data_filtered / data_filtered.shift(1)).dropna()
     last_prices = data_filtered.iloc[-1]
@@ -146,7 +146,7 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
         elif model_type == "Student-t":
             t_samples = np.random.standard_t(df=nu_val, size=(n_sims, len(final_list)))
             shocks = (t_samples @ L.T) * np.sqrt((nu_val - 2) / nu_val)
-        else: # GARCH
+        else:
             shocks = np.random.normal(0, 1, size=(n_sims, len(final_list)))
 
         daily_ret = shocks * sim_vols
@@ -161,15 +161,12 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
     portfolio_paths = np.sum(price_paths * [shares_dict[t] for t in final_list], axis=2)
     final_pnl = portfolio_paths[-1, :] - total_val
     
-    # Affichage de la métrique centrée
     st.columns(3)[1].metric(f"Issue Médiane", f"{np.median(final_pnl):,.2f} €", f"{(np.median(final_pnl)/total_val)*100:.2f} %")
 
-    # --- LE GRAPHIQUE QUE TU AIMES (GridSpec) ---
     fig = plt.figure(figsize=(16, 7), facecolor='none')
     gs = GridSpec(1, 2, width_ratios=[1.8, 1])
     plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
     
-    # Ax1: Trajectoires
     ax1 = fig.add_subplot(gs[0], facecolor='none')
     norm = plt.Normalize(final_pnl.min(), final_pnl.max())
     for i in np.random.choice(n_sims, 100):
@@ -177,15 +174,64 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
     ax1.set_title(f"Simulation {model_type}", fontsize=14)
     ax1.grid(axis='y', alpha=0.2)
     
-    # Ax2: Histogramme
     ax2 = fig.add_subplot(gs[1], facecolor='none')
     n, bins, patches = ax2.hist(final_pnl, bins=50, density=True, alpha=0.8)
-    for b, p in zip(bins, patches): 
-        p.set_facecolor('red' if b < 0 else 'green')
-    ax2.set_title("Distribution des Gains/Pertes", fontsize=14)
-    
+    for b, p in zip(bins, patches): p.set_facecolor('red' if b < 0 else 'green')
+    ax2.set_title("Distribution Gains/Pertes", fontsize=14)
     st.pyplot(fig, transparent=True)
 
-# --- MODE OPTIMISATION ---
-elif app_mode == "Optimisation & Frontière Efficiente":
-    st.info("Logique d'optimisation prête. Cliquez sur le bouton dans la sidebar pour lancer.")
+# --- LOGIQUE OPTIMISATION (FRONTALIER EFFICIENTE) ---
+elif app_mode == "Optimisation & Frontière Efficiente" and run_btn:
+    data_opt = raw_data[raw_data.index >= pd.Timestamp(start_opt)][final_list]
+    returns_daily = data_opt.pct_change().dropna()
+    
+    # Calcul annuel
+    mean_returns = returns_daily.mean() * 252
+    cov_matrix = returns_daily.cov() * 252
+    
+    results = np.zeros((3, n_portfolios))
+    weights_record = []
+
+    for i in range(n_portfolios):
+        weights = np.random.random(len(final_list))
+        weights /= np.sum(weights)
+        weights_record.append(weights)
+        
+        portfolio_return = np.sum(mean_returns * weights)
+        portfolio_std_dev = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+        
+        results[0,i] = portfolio_return
+        results[1,i] = portfolio_std_dev
+        results[2,i] = (portfolio_return - rf_rate) / portfolio_std_dev # Sharpe
+
+    # Identification des portefeuilles clés
+    max_sharpe_idx = np.argmax(results[2])
+    min_vol_idx = np.argmin(results[1])
+    
+    # Affichage
+    st.subheader("🎯 Analyse de la Frontière Efficiente")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        fig_opt, ax_opt = plt.subplots(figsize=(10, 6), facecolor='none')
+        ax_opt.set_facecolor('none')
+        sc = ax_opt.scatter(results[1,:], results[0,:], c=results[2,:], cmap='viridis', marker='o', s=10, alpha=0.5)
+        ax_opt.scatter(results[1,max_sharpe_idx], results[0,max_sharpe_idx], marker='*', color='r', s=200, label='Max Sharpe')
+        ax_opt.scatter(results[1,min_vol_idx], results[0,min_vol_idx], marker='*', color='b', s=200, label='Min Volatilité')
+        
+        ax_opt.set_title("Espace Risque-Rendement", color='white')
+        ax_opt.set_xlabel("Volatilité Annuelle", color='white')
+        ax_opt.set_ylabel("Rendement Annuel", color='white')
+        plt.colorbar(sc, label='Ratio de Sharpe')
+        ax_opt.legend()
+        st.pyplot(fig_opt, transparent=True)
+
+    with col2:
+        st.write("📈 **Meilleur Portefeuille (Sharpe)**")
+        best_w = weights_record[max_sharpe_idx]
+        df_w = pd.DataFrame({'Actif': final_list, 'Poids (%)': [round(x*100, 2) for x in best_w]})
+        st.table(df_w.set_index('Actif'))
+        
+        st.metric("Rendement Attendu", f"{results[0, max_sharpe_idx]*100:.2f} %")
+        st.metric("Volatilité", f"{results[1, max_sharpe_idx]*100:.2f} %")
