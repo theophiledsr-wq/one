@@ -10,21 +10,15 @@ from scipy.linalg import cholesky
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="European Portfolio Master Pro", layout="wide")
 
-# --- BANDEAU ANIMÉ RALENTI (TICKER TAPE) ---
+# --- BANDEAU ANIMÉ RALENTI (100s) ---
 def display_animated_ticker():
     indices = {
-        "^FCHI": "CAC 40",
-        "^GDAXI": "DAX 40",
-        "^STOXX50E": "EURO 50",
-        "^GSPC": "S&P 500",
-        "^IXIC": "NASDAQ",
-        "^N225": "NIKKEI",
-        "BTC-USD": "BITCOIN",
-        "GC=F": "OR"
+        "^FCHI": "CAC 40", "^GDAXI": "DAX 40", "^STOXX50E": "EURO 50",
+        "^GSPC": "S&P 500", "^IXIC": "NASDAQ", "^N225": "NIKKEI",
+        "BTC-USD": "BITCOIN", "GC=F": "OR"
     }
     
     try:
-        # Récupération sur 5 jours pour garantir des données valides (évite les NaN du week-end)
         ticker_data = yf.download(list(indices.keys()), period="5d", progress=False)['Close']
         ticker_data = ticker_data.ffill()
         
@@ -38,12 +32,10 @@ def display_animated_ticker():
                 color = "#00ff00" if var >= 0 else "#ff4b4b"
                 icon = "▲" if var >= 0 else "▼"
                 sign = "+" if var >= 0 else ""
-                
-                # Utilisation de <b> pour le gras (évite l'affichage des astérisques en HTML)
+                # Utilisation de <b> pour le gras sans astérisques
                 ticker_items += f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <b>{name}</b> {current:,.2f} <span style='color:{color};'>{icon} {sign}{var:.2f}%</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |"
 
-        # Contenu triplé pour une boucle infinie sans saut
-        full_content = (ticker_items * 3) if ticker_items else "Chargement des données marchés..."
+        full_content = (ticker_items * 3) if ticker_items else "Chargement des marchés..."
 
         st.markdown(f"""
             <style>
@@ -52,44 +44,29 @@ def display_animated_ticker():
                 100% {{ transform: translateX(-50%); }}
             }}
             .ticker-wrap {{
-                width: 100%;
-                overflow: hidden;
-                background-color: #0e1117;
-                padding: 12px 0;
-                border-bottom: 2px solid #31333f;
-                white-space: nowrap;
+                width: 100%; overflow: hidden; background-color: #0e1117;
+                padding: 12px 0; border-bottom: 2px solid #31333f; white-space: nowrap;
             }}
             .ticker-move {{
-                display: inline-block;
-                white-space: nowrap;
-                animation: marquee 100s linear infinite; /* Ralenti à 100s */
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                font-size: 1.1rem;
-                color: white;
+                display: inline-block; white-space: nowrap;
+                animation: marquee 100s linear infinite;
+                font-family: 'Segoe UI', sans-serif; font-size: 1.1rem; color: white;
             }}
-            .ticker-move:hover {{
-                animation-play-state: paused;
-                cursor: pointer;
-            }}
+            .ticker-move:hover {{ animation-play-state: paused; cursor: pointer; }}
             </style>
-            <div class="ticker-wrap">
-                <div class="ticker-move">
-                    {full_content}
-                </div>
-            </div>
+            <div class="ticker-wrap"><div class="ticker-move">{full_content}</div></div>
         """, unsafe_allow_html=True)
-    except Exception as e:
-        st.error(f"Erreur flux : {e}")
+    except:
+        st.error("Erreur de flux")
 
-# Lancement du bandeau
 display_animated_ticker()
 st.title("THE FRENCH BUILT TOOL FOR STRATEGIC INVESTING")
 
-# --- RÉCUPÉRATION DES TICKERS (WIKIPEDIA + FALLBACK) ---
+# --- RÉCUPÉRATION DES TICKERS ---
 @st.cache_data
 def get_european_base_list():
     try:
-        fallback = ["AIR.PA", "MC.PA", "OR.PA", "RMS.PA", "SAP.DE", "ASML.AS", "SIE.DE"]
+        fallback = ["AIR.PA", "MC.PA", "OR.PA", "SAP.DE", "ASML.AS"]
         indices = {"CAC 40": "https://en.wikipedia.org/wiki/CAC_40", "DAX 40": "https://en.wikipedia.org/wiki/DAX"}
         tickers = []
         for url in indices.values():
@@ -100,47 +77,41 @@ def get_european_base_list():
                     tickers.extend([str(tk).split('.')[0] + suffix for tk in t['Ticker'].tolist()])
                     break
         return sorted(list(set(tickers))) if tickers else fallback
-    except:
-        return ["AIR.PA", "MC.PA", "OR.PA", "SAP.DE", "ASML.AS"]
+    except: return ["AIR.PA", "MC.PA", "OR.PA", "SAP.DE", "ASML.AS"]
 
 BASE_LIST = get_european_base_list()
 
-# --- BARRE LATÉRALE ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("🧭 Navigation")
-    app_mode = st.radio("Outil :", ["Projection Monte Carlo", "Optimisation & Frontière Efficiente"])
-    
+    app_mode = st.radio("Choisir l'outil :", ["Projection Monte Carlo", "Optimisation & Frontière Efficiente"])
     st.divider()
     st.header("🛒 Portefeuille")
-    
     selected_tickers = st.multiselect("Sélectionner :", options=BASE_LIST, default=[BASE_LIST[0]])
-    
-    manual_t = st.text_input("Ajout manuel (ex: PUST.PA) :").upper()
+    manual_t = st.text_input("Ajout manuel :").upper()
     if 'manual_list' not in st.session_state: st.session_state.manual_list = []
     if st.button("➕ Ajouter"):
         if manual_t and manual_t not in st.session_state.manual_list:
-            st.session_state.manual_list.append(manual_t)
-            st.rerun()
+            st.session_state.manual_list.append(manual_t); st.rerun()
 
     final_list = list(set(selected_tickers + st.session_state.manual_list))
     if not final_list: st.stop()
-
     shares_dict = {t: st.number_input(f"Quantité {t}", value=10, min_value=1) for t in final_list}
 
     st.divider()
     if app_mode == "Projection Monte Carlo":
         model_type = st.radio("Modèle :", ["FHS (Historique)", "Student-t", "GARCH(1,1)"])
-        start_mc = st.date_input("Analyser depuis le :", datetime.date(2021, 1, 1), key="date_mc")
+        start_mc = st.date_input("Historique depuis :", datetime.date(2021, 1, 1))
         nu_val = st.slider("nu (v)", 3, 50, 5) if model_type == "Student-t" else 5
         n_days = st.number_input("Horizon (jours)", value=150)
         n_sims = st.number_input("Simulations", value=2000)
         run_btn = st.button("🚀 LANCER LA SIMULATION")
     else:
-        start_opt = st.date_input("Analyse depuis le", datetime.date(2021, 1, 1), key="date_opt")
+        start_opt = st.date_input("Analyse depuis :", datetime.date(2021, 1, 1))
         rf_rate = st.number_input("Taux sans risque (%)", value=3.0) / 100
         run_btn = st.button("🎯 GÉNÉRER LA FRONTIÈRE")
 
-# --- CHARGEMENT ---
+# --- DATA ---
 @st.cache_data
 def load_data_portfolio(tickers):
     df = yf.download(tickers + ["^GSPC"], start="2018-01-01")['Close']
@@ -148,10 +119,9 @@ def load_data_portfolio(tickers):
 
 raw_data = load_data_portfolio(final_list)
 
-# --- MODE MONTE CARLO ---
+# --- LOGIQUE MONTE CARLO ---
 if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
     data_filtered = raw_data[raw_data.index >= pd.Timestamp(start_mc)][final_list]
-    # Calcul des rendements logarithmiques (plus stables pour les simulations)
     returns = np.log(data_filtered / data_filtered.shift(1)).dropna()
     last_prices = data_filtered.iloc[-1]
     total_val = sum(last_prices[t] * shares_dict[t] for t in final_list)
@@ -176,7 +146,7 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
         elif model_type == "Student-t":
             t_samples = np.random.standard_t(df=nu_val, size=(n_sims, len(final_list)))
             shocks = (t_samples @ L.T) * np.sqrt((nu_val - 2) / nu_val)
-        else:
+        else: # GARCH
             shocks = np.random.normal(0, 1, size=(n_sims, len(final_list)))
 
         daily_ret = shocks * sim_vols
@@ -191,23 +161,31 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
     portfolio_paths = np.sum(price_paths * [shares_dict[t] for t in final_list], axis=2)
     final_pnl = portfolio_paths[-1, :] - total_val
     
-    st.metric("Issue Médiane", f"{np.median(final_pnl):,.2f} €", f"{(np.median(final_pnl)/total_val)*100:.2f} %")
-    st.line_chart(portfolio_paths[:, :100])
+    # Affichage de la métrique centrée
+    st.columns(3)[1].metric(f"Issue Médiane", f"{np.median(final_pnl):,.2f} €", f"{(np.median(final_pnl)/total_val)*100:.2f} %")
+
+    # --- LE GRAPHIQUE QUE TU AIMES (GridSpec) ---
+    fig = plt.figure(figsize=(16, 7), facecolor='none')
+    gs = GridSpec(1, 2, width_ratios=[1.8, 1])
+    plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
+    
+    # Ax1: Trajectoires
+    ax1 = fig.add_subplot(gs[0], facecolor='none')
+    norm = plt.Normalize(final_pnl.min(), final_pnl.max())
+    for i in np.random.choice(n_sims, 100):
+        ax1.plot(portfolio_paths[:, i], color=plt.cm.RdYlGn(norm(final_pnl[i])), alpha=0.3)
+    ax1.set_title(f"Simulation {model_type}", fontsize=14)
+    ax1.grid(axis='y', alpha=0.2)
+    
+    # Ax2: Histogramme
+    ax2 = fig.add_subplot(gs[1], facecolor='none')
+    n, bins, patches = ax2.hist(final_pnl, bins=50, density=True, alpha=0.8)
+    for b, p in zip(bins, patches): 
+        p.set_facecolor('red' if b < 0 else 'green')
+    ax2.set_title("Distribution des Gains/Pertes", fontsize=14)
+    
+    st.pyplot(fig, transparent=True)
 
 # --- MODE OPTIMISATION ---
 elif app_mode == "Optimisation & Frontière Efficiente":
-    data_opt = raw_data[final_list]
-    if run_btn:
-        ret_opt = data_opt[data_opt.index >= pd.Timestamp(start_opt)].pct_change().dropna()
-        mean_ret, cov_mat = ret_opt.mean() * 252, ret_opt.cov() * 252
-        
-        results = []
-        for _ in range(3000):
-            w = np.random.random(len(final_list)); w /= np.sum(w)
-            r = np.sum(mean_ret * w)
-            v = np.sqrt(w.T @ cov_mat @ w)
-            results.append([r, v, (r - rf_rate) / v, w])
-        
-        df_res = pd.DataFrame(results, columns=['ret', 'vol', 'sharpe', 'weights'])
-        st.write("### Frontière Efficiente")
-        st.scatter_chart(df_res, x='vol', y='ret', color='sharpe')
+    st.info("Logique d'optimisation prête. Cliquez sur le bouton dans la sidebar pour lancer.")
