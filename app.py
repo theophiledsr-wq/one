@@ -11,6 +11,7 @@ from scipy.linalg import cholesky
 st.set_page_config(page_title="European Portfolio Master Pro", layout="wide")
 
 # --- BANDEAU ANIMÉ (TICKER TAPE) ---
+# --- BANDEAU ANIMÉ RALENTI (TICKER TAPE) ---
 def display_animated_ticker():
     indices = {
         "^FCHI": "CAC 40",
@@ -23,7 +24,6 @@ def display_animated_ticker():
         "GC=F": "OR"
     }
     
-    # Récupération des données
     ticker_data = yf.download(list(indices.keys()), period="2d", progress=False)['Close']
     
     ticker_items = ""
@@ -34,42 +34,44 @@ def display_animated_ticker():
             var = ((current - prev) / prev) * 100
             color = "#00ff00" if var >= 0 else "#ff4b4b"
             icon = "▲" if var >= 0 else "▼"
-            
-            # Construction de la chaîne HTML pour chaque indice avec espacement important
-            ticker_items += f"&nbsp;&nbsp;&nbsp;&nbsp; **{name}** {current:,.2f} <span style='color:{color};'>{icon} {var:.2f}%</span> &nbsp;&nbsp;&nbsp;&nbsp; |"
+            # Augmentation de l'espacement entre les blocs d'indices
+            ticker_items += f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; **{name}** {current:,.2f} <span style='color:{color};'>{icon} {var:.2f}%</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |"
         except:
             continue
 
-    # Injection CSS pour l'animation de défilement
+    # On répète la chaîne pour un défilement continu sans coupure
+    full_content = ticker_items * 3 
+
     st.markdown(f"""
         <style>
         @keyframes marquee {{
-            0% {{ transform: translateX(100%); }}
-            100% {{ transform: translateX(-100%); }}
+            0% {{ transform: translateX(0); }}
+            100% {{ transform: translateX(-50%); }}
         }}
         .ticker-wrap {{
             width: 100%;
             overflow: hidden;
             background-color: #0e1117;
-            padding: 10px 0;
-            border-bottom: 1px solid #31333f;
+            padding: 12px 0;
+            border-bottom: 2px solid #31333f;
             white-space: nowrap;
+            position: relative;
         }}
         .ticker-move {{
             display: inline-block;
             white-space: nowrap;
-            padding-left: 100%;
-            animation: marquee 30s linear infinite;
-            font-family: 'Courier New', Courier, monospace;
-            font-size: 1.1rem;
+            animation: marquee 60s linear infinite; /* Ralenti à 60 secondes */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 1.15rem;
         }}
         .ticker-move:hover {{
-            animation-play-state: paused;
+            animation-play-state: paused; /* S'arrête au survol pour une lecture facile */
+            cursor: pointer;
         }}
         </style>
         <div class="ticker-wrap">
             <div class="ticker-move">
-                {ticker_items} {ticker_items} 
+                {full_content}
             </div>
         </div>
     """, unsafe_allow_html=True)
