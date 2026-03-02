@@ -7,34 +7,43 @@ from matplotlib.gridspec import GridSpec
 import datetime
 from scipy.linalg import cholesky
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="European Portfolio Master Pro", layout="wide")
 st.title("THE FRENCH BUILT TOOL FOR STRATEGIC INVESTING")
 
-# --- RÉCUPÉRATION SÉCURISÉE DES TICKERS ---
+# --- RÉCUPÉRATION DES TICKERS ---
 @st.cache_data
-def get_safe_tickers():
-    fallback = ["AIR.PA", "MC.PA", "OR.PA", "ASML.AS", "SAP.DE"]
+def get_european_base_list():
     try:
-        # Tentative de scraping (CAC 40 par exemple)
-        url = "https://en.wikipedia.org/wiki/CAC_40"
-        table = pd.read_html(url)[2]
-        tickers = [str(t).replace(" ", "") + ".PA" for t in table['Ticker'].tolist()]
-        return sorted(list(set(tickers)))
+        # Liste de secours robuste si le scraping Wikipédia échoue
+        fallback = ["AIR.PA", "MC.PA", "OR.PA", "RMS.PA", "SAP.DE", "ASML.AS", "SIE.DE"]
+        indices = {"CAC 40": "https://en.wikipedia.org/wiki/CAC_40", 
+                   "DAX 40": "https://en.wikipedia.org/wiki/DAX"}
+        tickers = []
+        for url in indices.values():
+            tables = pd.read_html(url)
+            for t in tables:
+                if 'Ticker' in t.columns:
+                    suffix = ".PA" if "CAC" in url else ".DE"
+                    tickers.extend([str(tk).split('.')[0] + suffix for tk in t['Ticker'].tolist()])
+                    break
+        return sorted(list(set(tickers))) if tickers else fallback
     except:
-        return fallback
+        return ["AIR.PA", "MC.PA", "OR.PA", "SAP.DE", "ASML.AS"]
 
-BASE_LIST = get_safe_tickers()
+BASE_LIST = get_european_base_list()
 
 # --- BARRE LATÉRALE ---
 with st.sidebar:
+    st.header("🧭 Navigation")
+    app_mode = st.radio("Choisir l'outil :", ["Projection Monte Carlo", "Optimisation & Frontière Efficiente"])
+    
+    st.divider()
     st.header("🛒 Portefeuille")
     
-    # Correction Erreur 1 : On s'assure que la valeur par défaut existe dans la liste
-    default_val = [BASE_LIST[0]] if BASE_LIST else []
-    if "AIR.PA" in BASE_LIST: default_val = ["AIR.PA"]
-    
-    selected_tickers = st.multiselect("Sélectionner dans les indices :", options=BASE_LIST, default=default_val)
+    # FIX ERREUR 1 : On vérifie que AIR.PA est bien dans la liste par défaut
+    safe_default = [BASE_LIST[0]] if "AIR.PA" not in BASE_LIST else ["AIR.PA"]
+    selected_tickers = st.multiselect("Sélectionner dans les indices :", options=BASE_LIST, default=safe_default)
     
     manual_t = st.text_input("Ajout manuel (ex: PUST.PA) :").upper()
     if 'manual_list' not in st.session_state: st.session_state.manual_list = []
@@ -46,97 +55,160 @@ with st.sidebar:
     final_list = list(set(selected_tickers + st.session_state.manual_list))
     
     if not final_list:
-        st.warning("Ajoutez au moins un actif pour continuer.")
+        st.error("Veuillez sélectionner au moins un actif.")
         st.stop()
 
-    shares_dict = {t: st.number_input(f"Quantité {t}", value=10, min_value=1, key=f"q_{t}") for t in final_list}
-    
+    shares_dict = {t: st.number_input(f"Quantité {t}", value=10, min_value=1) for t in final_list}
+
     st.divider()
-    app_mode = st.radio("Mode :", ["Monte Carlo", "Optimisation"])
-    run_btn = st.button("🚀 LANCER L'ANALYSE")
+    if app_mode == "Projection Monte Carlo":
+        model_type = st.radio("Modèle :", ["FHS (Historique)", "Student-t"])
+        nu_val = st.slider("nu (v)", 3, 50, 5, help="3=Risque extrême, 30+=Normal") if model_type == "Student-t" else 5
+        n_days = st.number_input("Horizon (jours)", value=150)
+        n_sims = st.number_input("Simulations", value=2000)
+        run_btn = st.button("🚀 LANCER LA SIMULATION")
+    else:
+        start_opt = st.date_input("Analyse depuis le", datetime.date(2021, 1, 1))
+        rf_rate = st.number_input("Taux sans risque (%)", value=3.0) / 100
+        run_btn = st.button("🎯 GÉNÉRER LA FRONTIÈRE")
 
 # --- CHARGEMENT DES DONNÉES ---
 @st.cache_data
-def load_market_data(tickers):
-    # On télécharge les actifs + le S&P 500 pour le benchmark
-    all_tickers = list(set(tickers + ["^GSPC"]))
-    df = yf.download(all_tickers, start="2019-01-01")['Close']
-    
-    # Correction Erreur 2 : Toujours forcer en DataFrame même si un seul ticker
-    if isinstance(df, pd.Series):
+def load_data(tickers, start_date):
+    download_list = tickers + ["^GSPC"]
+    df = yf.download(download_list, start=start_date)['Close']
+    # FIX ERREUR 2 : Gestion robuste Series vs DataFrame
+    if len(download_list) == 1:
+        df = df.to_frame(download_list[0])
+    elif isinstance(df, pd.Series):
         df = df.to_frame()
     return df.ffill().dropna()
 
-raw_df = load_market_data(final_list)
+raw_data = load_data(final_list, "2019-01-01")
 
-# Vérification après téléchargement
-available_assets = [t for t in final_list if t in raw_df.columns]
-if not available_assets:
-    st.error("Aucune donnée disponible pour les tickers sélectionnés.")
+if raw_data.empty:
+    st.error("Impossible de récupérer les données. Vérifiez les tickers.")
     st.stop()
 
-data = raw_df[available_assets]
-sp500 = raw_df["^GSPC"] if "^GSPC" in raw_df.columns else None
-
-# --- CALCULS DE BASE ---
+# Séparation assets / benchmark
+sp500 = raw_data["^GSPC"]
+data = raw_data[final_list]
 last_prices = data.iloc[-1]
-portfolio_value = sum(last_prices[t] * shares_dict[t] for t in available_assets)
-current_weights = np.array([(last_prices[t] * shares_dict[t]) / portfolio_value for t in available_assets])
+total_val = sum(last_prices[t] * shares_dict[t] for t in final_list)
+current_weights = np.array([(last_prices[t] * shares_dict[t]) / total_val for t in final_list])
 
-# --- LOGIQUE MONTE CARLO ---
-if app_mode == "Monte Carlo" and run_btn:
-    st.subheader(f"📈 Simulation Monte Carlo")
+# --- MODE 1 : MONTE CARLO ---
+if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
     vol_date = data.index[-1].date()
-    st.info(f"⚡ Volatilité EWMA (λ=0.94) fixée au : **{vol_date}**")
-
+    st.info(f"⚡ **Volatilité de départ (EWMA λ=0.94) fixée au : {vol_date}**")
+    
     returns = np.log(data / data.shift(1)).dropna()
-    # Correction Erreur 4 : Vérifier qu'on a assez de données pour l'échantillonnage
-    if len(returns) < 10:
-        st.error("Pas assez d'historique pour simuler.")
-        st.stop()
-
     decay = 0.94
     ewma_var = (returns**2).ewm(alpha=(1 - decay), adjust=False).mean()
     curr_vol = np.sqrt(ewma_var.iloc[-1].values)
     
-    # Paramètres de simulation
-    n_days, n_sims = 150, 2000
-    price_paths = np.zeros((n_days, n_sims, len(available_assets)))
+    price_paths = np.zeros((n_days, n_sims, len(final_list)))
     temp_prices = np.tile(last_prices.values, (n_sims, 1))
     sim_vols = np.tile(curr_vol, (n_sims, 1))
+    
+    if model_type == "Student-t":
+        corr = returns.corr().values
+        # Protection contre matrices non-définies positives
+        L = cholesky(corr + np.eye(len(final_list)) * 1e-8, lower=True)
 
-    # Simulation FHS simple
     for t in range(n_days):
-        shocks = returns.sample(n_sims, replace=True).values / np.sqrt(ewma_var.sample(n_sims).values)
+        if model_type == "FHS (Historique)":
+            shocks = (returns.sample(n_sims, replace=True).values / np.sqrt(ewma_var.sample(n_sims).values))
+        else:
+            t_samples = np.random.standard_t(df=nu_val, size=(n_sims, len(final_list)))
+            shocks = (t_samples @ L.T) * np.sqrt((nu_val - 2) / nu_val)
+        
         daily_ret = shocks * sim_vols
         temp_prices *= np.exp(daily_ret)
         price_paths[t] = temp_prices
         sim_vols = np.sqrt(decay * (sim_vols**2) + (1 - decay) * (daily_ret**2))
 
-    portfolio_paths = np.sum(price_paths * [shares_dict[t] for t in available_assets], axis=2)
-    final_pnl = portfolio_paths[-1, :] - portfolio_value
+    portfolio_paths = np.sum(price_paths * [shares_dict[t] for t in final_list], axis=2)
+    final_pnl = portfolio_paths[-1, :] - total_val
 
-    # Graphiques
-    fig = plt.figure(figsize=(12, 6), facecolor='none')
+    fig = plt.figure(figsize=(16, 7), facecolor='none')
+    gs = GridSpec(1, 2, width_ratios=[1.8, 1])
     plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
-    
-    gs = GridSpec(1, 2, width_ratios=[2, 1])
+
     ax1 = fig.add_subplot(gs[0], facecolor='none')
-    ax1.plot(portfolio_paths[:, :100], alpha=0.3)
-    ax1.set_title("100 Trajectoires Simulées")
+    norm = plt.Normalize(final_pnl.min(), final_pnl.max())
+    cmap = plt.cm.RdYlGn
+    for i in np.random.choice(n_sims, 100):
+        ax1.plot(portfolio_paths[:, i], color=cmap(norm(final_pnl[i])), alpha=0.3)
+    ax1.set_title("Simulation de Trajectoires", fontweight='bold')
 
     ax2 = fig.add_subplot(gs[1], facecolor='none')
-    n, bins, patches = ax2.hist(final_pnl, bins=50, alpha=0.8)
+    n, bins, patches = ax2.hist(final_pnl, bins=50, density=True, alpha=0.8)
     for b, p in zip(bins, patches):
         p.set_facecolor('red' if b < 0 else 'green')
-    ax2.set_title("Distribution des Issues")
+    ax2.set_title("Répartition des Issues (Gains/Pertes)")
+    ax2.axvline(0, color='white', lw=1, ls='--')
     st.pyplot(fig, transparent=True)
 
-# --- LOGIQUE OPTIMISATION ---
-elif app_mode == "Optimisation" and run_btn:
-    st.subheader("🎯 Frontière Efficiente")
-    
-    # Camembert de départ
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        fig_pie, ax_pie
+# --- MODE 2 : OPTIMISATION ---
+elif app_mode == "Optimisation & Frontière Efficiente":
+    st.subheader("📊 Composition Actuelle")
+    c_pie, c_tab = st.columns([1, 1.5])
+    with c_pie:
+        fig_p, ax_p = plt.subplots(figsize=(5, 5), facecolor='none')
+        ax_p.pie([last_prices[t]*shares_dict[t] for t in final_list], labels=final_list, autopct='%1.1f%%', textprops={'color':"w"})
+        st.pyplot(fig_p, transparent=True)
+    with c_tab:
+        st.table(pd.DataFrame({"Actif": final_list, "Poids": [f"{w*100:.1f}%" for w in current_weights]}))
+
+    if run_btn:
+        st.info(f"Analyse calculée sur la période : {start_opt} au {datetime.date.today()}")
+        ret_opt = data[data.index >= pd.Timestamp(start_opt)].pct_change().dropna()
+        mean_ret = ret_opt.mean() * 252
+        cov_mat = ret_opt.cov() * 252
+        
+        # Benchmark S&P 500
+        sp_ret = sp500[sp500.index >= pd.Timestamp(start_opt)].pct_change().dropna()
+        sp_stats = [sp_ret.std() * np.sqrt(252), sp_ret.mean() * 252]
+
+        n_p = 4000
+        res = []
+        for _ in range(n_p):
+            w = np.random.random(len(final_list)); w /= np.sum(w)
+            r = np.sum(mean_ret * w)
+            v = np.sqrt(w.T @ cov_mat @ w)
+            p_ts = (ret_opt * w).sum(axis=1)
+            downside = p_ts[p_ts < 0].std() * np.sqrt(252)
+            cum = (1 + p_ts).cumprod()
+            mdd = abs(((cum / cum.expanding().max()) - 1).min())
+            res.append([r, v, (r-rf_rate)/v, (r-rf_rate)/downside if downside!=0 else 0, r/mdd if mdd!=0 else 0, w])
+
+        df_res = pd.DataFrame(res, columns=['ret', 'vol', 'sharpe', 'sortino', 'calmar', 'weights'])
+        
+        # FIX ERREUR 3 : Légende décalée
+        fig_ef, ax_ef = plt.subplots(figsize=(12, 7), facecolor='none')
+        sc = ax_ef.scatter(df_res['vol'], df_res['ret'], c=df_res['sharpe'], cmap='RdYlGn', alpha=0.3)
+        
+        # Stratégies 100%
+        for i, t in enumerate(final_list):
+            ax_ef.scatter(np.sqrt(cov_mat.iloc[i,i]), mean_ret[i], s=100, label=f"100% {t}", edgecolors='white')
+        
+        # Points Optimes
+        best_s = df_res.iloc[df_res['sharpe'].idxmax()]
+        ax_ef.scatter(best_s['vol'], best_s['ret'], color='gold', marker='*', s=300, label='MAX SHARPE', edgecolors='black')
+        
+        ax_ef.scatter(sp_stats[0], sp_stats[1], color='blue', marker='D', s=150, label='S&P 500')
+        
+        curr_v = np.sqrt(current_weights.T @ cov_mat @ current_weights)
+        curr_r = np.sum(mean_ret * current_weights)
+        ax_ef.scatter(curr_v, curr_r, color='white', marker='X', s=300, label='ACTUEL')
+
+        ax_ef.set_xlabel("Risque (Volatilité)")
+        ax_ef.set_ylabel("Rendement Annuel")
+        # On place la légende à l'extérieur pour éviter le chevauchement
+        ax_ef.legend(loc='upper left', bbox_to_anchor=(1.15, 1), facecolor='#262730')
+        plt.colorbar(sc, label='Ratio de Sharpe')
+        st.pyplot(fig_ef, transparent=True)
+        
+        st.subheader("📋 Répartition suggérée (Max Sharpe)")
+        st.write(pd.DataFrame({"Actif": final_list, "Allocation (%)": best_s['weights']*100}).style.format({"Allocation (%)": "{:.2f}%"}))
