@@ -38,8 +38,7 @@ def display_market_ticker():
                         sign = "+" if var >= 0 else ""
                         
                         # Construction de l'élément avec espacement
-                        ticker_items += f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; **{name}** {current:,.2f} <span style='color:{color};'>{icon} {sign}{var:.2f}%</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |"
-
+                        ticker_items += f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <b style='color:white;'>{name}</b> {current:,.2f} <span style='color:{color};'>{icon} {sign}{var:.2f}%</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |"
         # On triple le contenu pour assurer une boucle infinie sans "saut" visuel
         full_content = (ticker_items * 3) if ticker_items else "Initialisation du flux financier..."
 
