@@ -9,6 +9,56 @@ from scipy.linalg import cholesky
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="European Portfolio Master Pro", layout="wide")
+
+# --- BANDEAU DES INDICES MONDIAUX ---
+def display_market_ticker():
+    # Liste des indices majeurs
+    indices = {
+        "^FCHI": "CAC 40",
+        "^GDAXI": "DAX 40",
+        "^STOXX50E": "EURO STOXX 50",
+        "^GSPC": "S&P 500",
+        "^IXIC": "NASDAQ",
+        "^N225": "NIKKEI 225"
+    }
+    
+    # Téléchargement des données récentes (2 jours pour calculer la variation)
+    ticker_data = yf.download(list(indices.keys()), period="2d", progress=False)['Close']
+    
+    # Création du bandeau avec des colonnes
+    cols = st.columns(len(indices))
+    
+    for i, (ticker, name) in enumerate(indices.items()):
+        try:
+            current_price = ticker_data[ticker].iloc[-1]
+            prev_price = ticker_data[ticker].iloc[-2]
+            variation = ((current_price - prev_price) / prev_price) * 100
+            
+            color = "green" if variation >= 0 else "red"
+            sign = "+" if variation >= 0 else ""
+            
+            with cols[i]:
+                st.markdown(
+                    f"""
+                    <div style="text-align: center; border-right: 1px solid #444;">
+                        <p style="margin-bottom: 0; font-size: 0.8rem; color: #aaa;">{name}</p>
+                        <p style="margin-top: 0; font-weight: bold; font-size: 1rem;">
+                            {current_price:,.2f} 
+                            <span style="color: {color}; font-size: 0.9rem;">
+                                {sign}{variation:.2f}%
+                            </span>
+                        </p>
+                    </div>
+                    """, 
+                    unsafe_allow_html=True
+                )
+        except:
+            continue
+
+# Affichage du bandeau tout en haut
+display_market_ticker()
+st.divider()
+
 st.title("THE FRENCH BUILT TOOL FOR STRATEGIC INVESTING")
 
 # --- RÉCUPÉRATION DES TICKERS ---
@@ -58,7 +108,6 @@ with st.sidebar:
     if app_mode == "Projection Monte Carlo":
         model_type = st.radio("Modèle :", ["FHS (Historique)", "Student-t", "GARCH(1,1)"])
         
-        # --- INFOS BULLES ---
         if model_type == "FHS (Historique)":
             st.info("**FHS :** Utilise les rendements réels du passé.")
         elif model_type == "Student-t":
@@ -66,7 +115,6 @@ with st.sidebar:
         elif model_type == "GARCH(1,1)":
             st.info("**GARCH(1,1) :** Volatilité dynamique auto-adaptative.")
 
-        # NOUVEAU : Sélecteur de date pour Student-t et GARCH
         start_mc = st.date_input("Analyser l'historique depuis le :", datetime.date(2021, 1, 1), key="date_mc")
         
         nu_val = st.slider("nu (v)", 3, 50, 5) if model_type == "Student-t" else 5
@@ -78,21 +126,17 @@ with st.sidebar:
         rf_rate = st.number_input("Taux sans risque (%)", value=3.0) / 100
         run_btn = st.button("🎯 GÉNÉRER LA FRONTIÈRE")
 
-# --- CHARGEMENT ---
+# --- CHARGEMENT DES DONNÉES PORTEFEUILLE ---
 @st.cache_data
-def load_data(tickers, start_date):
-    # On télécharge depuis 2019 par défaut pour avoir assez de recul, 
-    # mais on filtrera ensuite selon le sélecteur de l'utilisateur
+def load_data_portfolio(tickers):
     df = yf.download(tickers + ["^GSPC"], start="2018-01-01")['Close']
     return df.ffill().dropna()
 
-raw_data = load_data(final_list, "2018-01-01")
+raw_data = load_data_portfolio(final_list)
 
 # --- LOGIQUE MONTE CARLO ---
 if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
-    # Filtrage selon la date choisie par l'utilisateur
     data_filtered = raw_data[raw_data.index >= pd.Timestamp(start_mc)][final_list]
-    
     if data_filtered.empty:
         st.error("Pas de données pour cette période.")
         st.stop()
@@ -104,7 +148,6 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
     last_prices = data_filtered.iloc[-1]
     total_val = sum(last_prices[t] * shares_dict[t] for t in final_list)
     
-    # Init sim
     price_paths = np.zeros((n_days, n_sims, len(final_list)))
     temp_prices = np.tile(last_prices.values, (n_sims, 1))
     
@@ -142,7 +185,6 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
     
     st.columns(3)[1].metric(f"Issue Médiane", f"{np.median(final_pnl):,.2f} €", f"{(np.median(final_pnl)/total_val)*100:.2f} %")
 
-    # Graphiques (Identiques à précédemment)
     fig = plt.figure(figsize=(16, 7), facecolor='none')
     gs = GridSpec(1, 2, width_ratios=[1.8, 1])
     plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
@@ -150,6 +192,8 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
     norm = plt.Normalize(final_pnl.min(), final_pnl.max())
     for i in np.random.choice(n_sims, 100):
         ax1.plot(portfolio_paths[:, i], color=plt.cm.RdYlGn(norm(final_pnl[i])), alpha=0.3)
+    ax1.set_title(f"Projection {model_type}")
+    
     ax2 = fig.add_subplot(gs[1], facecolor='none')
     n, bins, patches = ax2.hist(final_pnl, bins=50, density=True, alpha=0.8)
     for b, p in zip(bins, patches): p.set_facecolor('red' if b < 0 else 'green')
@@ -159,7 +203,8 @@ if app_mode == "Projection Monte Carlo" and 'run_btn' in locals() and run_btn:
 elif app_mode == "Optimisation & Frontière Efficiente":
     data_opt = raw_data[final_list]
     last_prices = data_opt.iloc[-1]
-    current_weights = np.array([(last_prices[t] * shares_dict[t]) / sum(last_prices[x]*shares_dict[x] for x in final_list) for t in final_list])
+    total_port_val = sum(last_prices[x]*shares_dict[x] for x in final_list)
+    current_weights = np.array([(last_prices[t] * shares_dict[t]) / total_port_val for t in final_list])
     
     st.subheader("📊 Composition Actuelle")
     c_pie, c_tab = st.columns([1, 1.5])
@@ -172,7 +217,6 @@ elif app_mode == "Optimisation & Frontière Efficiente":
 
     if run_btn:
         ret_opt = data_opt[data_opt.index >= pd.Timestamp(start_opt)].pct_change().dropna()
-        # ... (reste du code d'optimisation inchangé)
         mean_ret = ret_opt.mean() * 252
         cov_mat = ret_opt.cov() * 252
         sp_ret = raw_data["^GSPC"][raw_data.index >= pd.Timestamp(start_opt)].pct_change().dropna()
