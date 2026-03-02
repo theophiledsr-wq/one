@@ -8,193 +8,233 @@ import datetime
 from scipy.linalg import cholesky
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="European Monte Carlo & Optimizer", layout="wide")
+st.set_page_config(page_title="European Portfolio Master", layout="wide")
 
-st.title("THE FRENCH BUILT TOOL FOR MONTE CARLO PROJECTION FOR THE EUROPEAN INVESTOR")
+# CSS pour le rendu propre
+st.markdown("""
+    <style>
+    .stPlot { background-color: transparent; }
+    summary { font-weight: bold; font-size: 1.1rem; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- RÉCUPÉRATION DES TICKERS ---
+# --- FONCTION DE RÉCUPÉRATION DES TICKERS (WIKIPEDIA) ---
 @st.cache_data
-def get_european_base_list():
-    try:
-        indices = {"CAC 40": "https://en.wikipedia.org/wiki/CAC_40", 
-                   "DAX 40": "https://en.wikipedia.org/wiki/DAX", 
-                   "IBEX 35": "https://en.wikipedia.org/wiki/IBEX_35"}
-        tickers = []
-        for url in indices.values():
+def get_european_tickers():
+    indices = {
+        "CAC 40": ("https://en.wikipedia.org/wiki/CAC_40", "Ticker", ".PA"),
+        "DAX 40": ("https://en.wikipedia.org/wiki/DAX", "Ticker", ".DE"),
+        "IBEX 35": ("https://en.wikipedia.org/wiki/IBEX_35", "Ticker", ".MC"),
+        "FTSE MIB": ("https://en.wikipedia.org/wiki/FTSE_MIB", "Ticker", ".MI")
+    }
+    all_tickers = []
+    for name, (url, col, suffix) in indices.items():
+        try:
             tables = pd.read_html(url)
             for t in tables:
-                if 'Ticker' in t.columns:
-                    tickers.extend([str(tk).split('.')[0] + (".PA" if "CAC" in url else ".DE" if "DAX" in url else ".MC") for tk in t['Ticker'].tolist()])
+                if col in t.columns:
+                    raw = t[col].tolist()
+                    all_tickers.extend([str(tk).split('.')[0] + suffix for tk in raw])
                     break
-        return sorted(list(set(tickers)))
-    except:
-        return ["AIR.PA", "MC.PA", "SAP.DE", "ASML.AS"]
+        except: continue
+    return sorted(list(set(all_tickers)))
 
-BASE_TICKERS = get_european_base_list()
+BASE_LIST = get_european_tickers()
 
-# --- BARRE LATÉRALE ---
+# --- BARRE LATÉRALE (SIDEBAR) ---
 with st.sidebar:
-    st.header("🧭 Navigation")
-    app_mode = st.radio("Choisir l'outil :", ["Projection Monte Carlo", "Frontière Efficiente & Ratios"])
+    st.title("⚙️ PRO NAVIGATION")
+    app_mode = st.radio("Sélectionner l'outil :", ["Projection Monte Carlo", "Frontière Efficiente & Ratios"])
     
     st.divider()
-    st.header("🛒 Portefeuille")
-    selected_tickers = st.multiselect("Actifs :", options=BASE_TICKERS, default=["AIR.PA"])
+    st.header("🛒 Composition du Portefeuille")
+    selected_tickers = st.multiselect("Sélectionner dans les indices :", options=BASE_LIST, default=["AIR.PA"])
     
-    manual_t = st.text_input("Ajout manuel :").upper()
+    manual_t = st.text_input("Ajout manuel (ex: PUST.PA, BTC-EUR) :").upper()
     if 'manual_list' not in st.session_state: st.session_state.manual_list = []
-    if st.button("➕ Ajouter"):
+    if st.button("➕ Ajouter au portefeuille"):
         if manual_t and manual_t not in st.session_state.manual_list:
             st.session_state.manual_list.append(manual_t)
+            st.rerun()
 
     final_list = list(set(selected_tickers + st.session_state.manual_list))
-    
+    if st.button("🗑️ Vider le portefeuille"):
+        st.session_state.manual_list = []
+        st.rerun()
+
+    st.divider()
+    # Saisie des unités
+    shares_dict = {}
+    if final_list:
+        st.subheader("Unités détenues")
+        for t in final_list:
+            shares_dict[t] = st.number_input(f"Quantité {t}", value=10, min_value=1)
+
+    st.divider()
     if app_mode == "Projection Monte Carlo":
-        st.divider()
-        st.header("🔬 Modèle Mathématique")
-        model_type = st.radio("Moteur :", ["FHS (Historique)", "Student-t (Fat-Tails)"])
-        nu = st.slider("Degrés de liberté (nu)", 3, 50, 5) if "Student" in model_type else 5
-        
-        with st.form("sim_form"):
-            shares_dict = {t: st.number_input(f"Unités {t}", value=10, min_value=1) for t in final_list}
-            n_days = st.number_input("Horizon (jours)", value=150)
-            n_sims = st.number_input("Nb Simulations", value=2000)
-            decay = st.slider("Lambda (EWMA)", 0.80, 0.99, 0.94)
-            run_sim = st.form_submit_button("🚀 LANCER LA SIMULATION")
+        model_type = st.radio("Moteur Mathématique :", ["FHS (Historique)", "Student-t (Fat-Tails)"])
+        nu = st.slider("Degrés de liberté (nu)", 3, 30, 5) if "Student" in model_type else 5
+        horizon = st.number_input("Horizon (jours)", value=150)
+        n_sims = st.number_input("Simulations", value=2000)
+        decay = st.slider("Lambda (EWMA)", 0.80, 0.99, 0.94)
+        run_btn = st.button("🚀 LANCER LA PROJECTION")
     else:
-        with st.form("opt_form"):
-            st.header("⚙️ Paramètres d'Optimisation")
-            start_date_opt = st.date_input("Historique d'analyse", datetime.date(2020, 1, 1))
-            risk_free_rate = st.number_input("Taux sans risque (%)", value=2.0) / 100
-            n_portfolios = st.number_input("Nombre de combinaisons à tester", value=5000)
-            run_opt = st.form_submit_button("🎯 GÉNÉRER LA FRONTIÈRE")
+        start_opt = st.date_input("Historique d'analyse", datetime.date(2021, 1, 1))
+        rf_rate = st.number_input("Taux sans risque (%)", value=3.0) / 100
+        run_btn = st.button("🎯 GÉNÉRER L'ANALYSE")
 
-# --- LOGIQUE : PROJECTION MONTE CARLO ---
-if app_mode == "Projection Monte Carlo" and 'run_sim' in locals() and run_sim:
-    if not final_list: st.error("Portefeuille vide !"); st.stop()
+# --- CORPS DE L'APPLICATION ---
+st.header(f"✨ {app_mode.upper()}")
+
+if not final_list:
+    st.info("👈 Veuillez ajouter des actifs dans le menu à gauche pour commencer.")
+    st.stop()
+
+# Téléchargement des données communes
+with st.spinner("Téléchargement des données Yahoo Finance..."):
+    # On prend un peu plus d'historique pour la calibration
+    raw_data = yf.download(final_list, start="2019-01-01")['Close']
+    if len(final_list) == 1: raw_data = raw_data.to_frame(final_list[0])
+    raw_data = raw_data.ffill().dropna()
+    last_prices = raw_data.iloc[-1]
     
-    with st.spinner("Calcul des trajectoires..."):
-        data = yf.download(final_list, start="2019-01-01")['Close']
-        if len(final_list) == 1: data = data.to_frame(final_list[0])
-        data = data.ffill().dropna()
-        
-        returns = np.log(data / data.shift(1)).dropna()
-        start_prices = data.iloc[-1].values
-        fixed_shares = np.array([shares_dict[t] for t in final_list])
-        initial_val = np.sum(start_prices * fixed_shares)
+    # Calcul des poids actuels
+    current_values = {t: last_prices[t] * shares_dict[t] for t in final_list}
+    total_val = sum(current_values.values())
+    current_weights = np.array([current_values[t]/total_val for t in final_list])
 
-        # Simulation Logic (Simplified for brevity, reusing your previous engine)
-        ewma_var = (returns**2).ewm(alpha=(1 - decay), adjust=False).mean()
-        hist_vol = np.sqrt(ewma_var).iloc[-1].values
-        sim_vols = np.tile(hist_vol, (n_sims, 1))
-        price_paths = np.zeros((n_days, n_sims, len(final_list)))
-        temp_prices = np.tile(start_prices, (n_sims, 1))
+# --- MODE 1 : MONTE CARLO ---
+if app_mode == "Projection Monte Carlo" and run_btn:
+    returns = np.log(raw_data / raw_data.shift(1)).dropna()
+    
+    # Calibration Volatilité EWMA
+    ewma_var = (returns**2).ewm(alpha=(1 - decay), adjust=False).mean()
+    curr_vol = np.sqrt(ewma_var.iloc[-1].values)
+    
+    # Simulation
+    price_paths = np.zeros((horizon, n_sims, len(final_list)))
+    temp_prices = np.tile(last_prices.values, (n_sims, 1))
+    sim_vols = np.tile(curr_vol, (n_sims, 1))
+    
+    if model_type == "Student-t (Fat-Tails)":
+        L = cholesky(returns.corr().values, lower=True)
 
-        for t in range(n_days):
-            shocks = np.random.standard_normal((n_sims, len(final_list))) # Placeholder for logic
-            temp_prices *= np.exp(shocks * 0.01) # simplified
-            price_paths[t] = temp_prices
+    for t in range(horizon):
+        if model_type == "FHS (Historique)":
+            shocks = returns.sample(n_sims, replace=True).values / np.sqrt(ewma_var.sample(n_sims).values)
+        else:
+            t_samples = np.random.standard_t(df=nu, size=(n_sims, len(final_list)))
+            shocks = (t_samples @ L.T) * np.sqrt((nu - 2) / nu)
         
-        portfolio_sim = np.sum(price_paths * fixed_shares, axis=2)
-        final_pnl = portfolio_sim[-1, :] - initial_val
+        daily_ret = shocks * sim_vols
+        temp_prices *= np.exp(daily_ret)
+        price_paths[t] = temp_prices
+        sim_vols = np.sqrt(decay * (sim_vols**2) + (1 - decay) * (daily_ret**2))
 
-        # Display Metrics
-        st.subheader("📊 Résultats Monte Carlo")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Espérance", f"{np.mean(final_pnl):+,.2f} €")
-        c2.metric("Probabilité Profit", f"{np.mean(final_pnl > 0)*100:.1f} %")
-        c3.metric("VaR 95%", f"{np.percentile(final_pnl, 5):,.2f} €")
-        st.line_chart(portfolio_sim[:, :100])
+    portfolio_paths = np.sum(price_paths * [shares_dict[t] for t in final_list], axis=2)
+    final_pnl = portfolio_paths[-1, :] - total_val
 
-# --- LOGIQUE : FRONTIÈRE EFFICIENTE ---
-if app_mode == "Frontière Efficiente & Ratios" and 'run_opt' in locals() and run_opt:
-    if len(final_list) < 2:
-        st.warning("Il faut au moins 2 actifs pour calculer une frontière efficiente et optimiser la diversification.")
-        st.stop()
+    # Affichage des KPIs Natifs
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Valeur Portefeuille", f"{total_val:,.2f} €")
+    col2.metric("Espérance Gain", f"{np.mean(final_pnl):+,.2f} €")
+    col3.metric("Probabilité Profit", f"{np.mean(final_pnl > 0)*100:.1f} %")
+    col4.metric("VaR 95% (Risque)", f"{np.percentile(final_pnl, 5):,.2f} €")
 
-    with st.spinner("Analyse de la diversification..."):
-        data = yf.download(final_list, start=start_date_opt)['Close'].ffill().dropna()
-        returns = data.pct_change().dropna()
-        
-        # Stats de base
-        mean_returns = returns.mean() * 252
-        cov_matrix = returns.cov() * 252
-        
-        # Simulations de portefeuilles aléatoires
-        results = np.zeros((4, n_portfolios))
-        weights_record = []
-        
-        for i in range(n_portfolios):
-            weights = np.random.random(len(final_list))
-            weights /= np.sum(weights)
-            weights_record.append(weights)
-            
-            p_ret = np.sum(mean_returns * weights)
-            p_std = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
-            
-            # Calcul Max Drawdown pour Calmar
-            p_daily_rets = (returns * weights).sum(axis=1)
-            cum_rets = (1 + p_daily_rets).cumprod()
-            peak = cum_rets.expanding(min_periods=1).max()
-            dd = (cum_rets/peak) - 1
-            max_dd = abs(dd.min())
-            
-            # Downside Deviation pour Sortino
-            downside_rets = p_daily_rets[p_daily_rets < 0]
-            downside_std = downside_rets.std() * np.sqrt(252)
-            
-            results[0,i] = p_ret
-            results[1,i] = p_std
-            results[2,i] = (p_ret - risk_free_rate) / p_std # Sharpe
-            results[3,i] = max_dd
+    # Graphes Monte Carlo
+    fig = plt.figure(figsize=(16, 7), facecolor='none')
+    gs = GridSpec(1, 2, width_ratios=[1.8, 1])
+    norm = plt.Normalize(final_pnl.min(), final_pnl.max())
+    cmap = plt.cm.RdYlGn
 
-        # Identification des portefeuilles clés
-        max_sharpe_idx = np.argmax(results[2])
-        sdp, rp = results[1,max_sharpe_idx], results[0,max_sharpe_idx]
-        best_weights = weights_record[max_sharpe_idx]
-        
-        # --- AFFICHAGE ---
-        st.subheader("🎯 Optimisation du Ratio de Sharpe")
-        
-        # Ratios du meilleur portefeuille
-        best_ret = results[0, max_sharpe_idx]
-        best_vol = results[1, max_sharpe_idx]
-        best_dd = results[3, max_sharpe_idx]
-        
-        # Calcul Sortino final pour le meilleur
-        best_p_rets = (returns * best_weights).sum(axis=1)
-        best_sortino = (best_ret - risk_free_rate) / (best_p_rets[best_p_rets < 0].std() * np.sqrt(252))
+    ax1 = fig.add_subplot(gs[0], facecolor='none')
+    for i in np.random.choice(n_sims, 150):
+        ax1.plot(portfolio_paths[:, i], color=cmap(norm(final_pnl[i])), alpha=0.2, lw=0.7)
+    ax1.plot(np.median(portfolio_paths, axis=1), color='white', lw=3, label='Médiane')
+    ax1.set_title("TRAJECTOIRES (ROUGE = RISQUE / VERT = OPPORTUNITÉ)", color='white', fontweight='bold')
+    
+    ax2 = fig.add_subplot(gs[1], facecolor='none')
+    n, bins, patches = ax2.hist(final_pnl, bins=50, density=True, alpha=0.8)
+    for b, p in zip(bins, patches): p.set_facecolor(cmap(norm(b)))
+    ax2.set_title("DISTRIBUTION DES PROFITS/PERTES", color='white', fontweight='bold')
+    
+    st.pyplot(fig, transparent=True)
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Ratio de Sharpe", f"{results[2, max_sharpe_idx]:.2f}")
-        col2.metric("Ratio de Sortino", f"{best_sortino:.2f}")
-        col3.metric("Ratio de Calmar", f"{(best_ret / best_dd):.2f}")
+# --- MODE 2 : FRONTIÈRE EFFICIENTE ---
+if app_mode == "Frontière Efficiente & Ratios":
+    # 1. Camembert de répartition
+    st.subheader("📊 Répartition et Prix du jour")
+    c_pie, c_table = st.columns([1, 1.2])
+    
+    with c_pie:
+        fig_p, ax_p = plt.subplots(figsize=(5, 5), facecolor='none')
+        ax_p.pie(current_values.values(), labels=final_list, autopct='%1.1f%%', 
+                 colors=plt.cm.viridis(np.linspace(0, 1, len(final_list))), textprops={'color':"w"})
+        st.pyplot(fig_p, transparent=True)
+        
+    with c_table:
+        df_sum = pd.DataFrame({
+            "Ticker": final_list,
+            "Prix Unitaire": [last_prices[t] for t in final_list],
+            "Quantité": [shares_dict[t] for t in final_list],
+            "Valeur (€)": [current_values[t] for t in final_list],
+            "Poids (%)": [current_weights[i]*100 for i, t in enumerate(final_list)]
+        })
+        st.dataframe(df_sum.style.format({"Prix Unitaire": "{:.2f}€", "Valeur (€)": "{:,.2f}€", "Poids (%)": "{:.1f}%"}), hide_index=True)
+
+    if run_btn:
+        st.divider()
+        # Calcul Frontière
+        returns_opt = raw_data[raw_data.index >= pd.Timestamp(start_opt)].pct_change().dropna()
+        mean_ret = returns_opt.mean() * 252
+        cov_mat = returns_opt.cov() * 252
+        
+        n_p = 4000
+        results = np.zeros((3, n_p))
+        for i in range(n_p):
+            w = np.random.random(len(final_list))
+            w /= np.sum(w)
+            results[0,i] = np.sum(mean_ret * w) # Return
+            results[1,i] = np.sqrt(np.dot(w.T, np.dot(cov_mat, w))) # Vol
+            results[2,i] = (results[0,i] - rf_rate) / results[1,i] # Sharpe
+
+        # Stats Portefeuille Actuel
+        curr_ret_ann = np.sum(mean_ret * current_weights)
+        curr_vol_ann = np.sqrt(np.dot(current_weights.T, np.dot(cov_mat, current_weights)))
+        curr_sharpe = (curr_ret_ann - rf_rate) / curr_vol_ann
+
+        # Ratios supplémentaires (Sortino / Calmar)
+        p_rets = (returns_opt * current_weights).sum(axis=1)
+        downside = p_rets[p_rets < 0].std() * np.sqrt(252)
+        curr_sortino = (curr_ret_ann - rf_rate) / downside
+        
+        cum_ret = (1 + p_rets).cumprod()
+        max_dd = abs(((cum_ret / cum_ret.expanding().max()) - 1).min())
+        curr_calmar = curr_ret_ann / max_dd
+
+        # Affichage Ratios
+        st.subheader("🎯 Diagnostic d'Efficience")
+        r1, r2, r3 = st.columns(3)
+        r1.metric("Ratio de Sharpe", f"{curr_sharpe:.2f}", help="Rendement/Risque global")
+        r2.metric("Ratio de Sortino", f"{curr_sortino:.2f}", help="Performance vs Risque de baisse")
+        r3.metric("Ratio de Calmar", f"{curr_calmar:.2f}", help="Performance vs Pire perte historique")
 
         # Graphique Frontière
-        fig, ax = plt.subplots(figsize=(10, 6), facecolor='none')
-        scatter = ax.scatter(results[1,:], results[0,:], c=results[2,:], cmap='RdYlGn', alpha=0.5)
-        ax.scatter(sdp, rp, marker='*', color='white', s=200, label='Max Sharpe Portfolio')
-        ax.set_xlabel("Volatilité Annuelle (Risque)")
-        ax2 = ax.set_ylabel("Rendement Annuel")
-        ax.set_title("Frontière Efficiente - Analyse Risque/Rendement")
-        plt.colorbar(scatter, label='Ratio de Sharpe')
-        st.pyplot(fig, transparent=True)
+        fig_ef, ax_ef = plt.subplots(figsize=(12, 6), facecolor='none')
+        sc = ax_ef.scatter(results[1,:], results[0,:], c=results[2,:], cmap='RdYlGn', alpha=0.4)
+        ax_ef.scatter(curr_vol_ann, curr_ret_ann, color='blue', marker='X', s=250, label='VOTRE POSITION')
+        ax_ef.set_xlabel("Volatilité Annuelle", color='white')
+        ax_ef.set_ylabel("Rendement Annuel", color='white')
+        plt.colorbar(sc, label='Ratio de Sharpe')
+        ax_ef.legend()
+        st.pyplot(fig_ef, transparent=True)
 
-        # Allocation suggérée
-        st.write("### ⚖️ Allocation Optimale Suggérée")
-        alloc_df = pd.DataFrame({'Actif': final_list, 'Poids (%)': best_weights * 100})
-        st.table(alloc_df.sort_values(by='Poids (%)', ascending=False))
-
-        # --- DÉFINITIONS ---
-        with st.expander("📚 Comprendre les Ratios Financiers"):
-            st.markdown(r"""
-            - **Ratio de Sharpe** : Mesure l'excès de rendement par unité de risque total (volatilité). 
-              $$Sharpe = \frac{R_p - R_f}{\sigma_p}$$
-            - **Ratio de Sortino** : Similaire au Sharpe, mais ne prend en compte que la volatilité "négative" (le risque de baisse), car la volatilité à la hausse est bénéfique pour l'investisseur.
-              $$Sortino = \frac{R_p - R_f}{\sigma_{downside}}$$
-            - **Ratio de Calmar** : Compare le rendement annuel moyen au **Maximum Drawdown** (la pire perte historique). Il indique si le rendement compense le risque de "gros trou" dans le portefeuille.
-              $$Calmar = \frac{Rendement\ Annuel}{Max\ Drawdown}$$
+        with st.expander("📚 Définitions des Ratios"):
+            st.markdown("""
+            - **Sharpe** : Rendement excédentaire divisé par la volatilité totale. Plus il est élevé, plus votre prise de risque est rémunérée.
+            - **Sortino** : Identique au Sharpe mais ne punit que la volatilité négative (celle qui fait perdre de l'argent).
+            - **Calmar** : Rendement annuel / Maximum Drawdown. Indique si le gain vaut le coup par rapport à la plus grosse chute historique subie.
             """)
 
 st.divider()
-st.caption("The French Built Tool - Expert Analysis for European Portfolios")
+st.caption("Outil de simulation quantitative - Données Yahoo Finance - Modèles FHS & Student-t Corrélation par Cholesky.")
