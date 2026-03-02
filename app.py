@@ -19,27 +19,41 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- FONCTION DE RÉCUPÉRATION DES TICKERS (WIKIPEDIA) ---
+# --- FONCTION DE RÉCUPÉRATION SÉCURISÉE ---
 @st.cache_data
 def get_european_tickers():
+    fallback = ["AIR.PA", "MC.PA", "OR.PA", "SAP.DE", "ASML.AS", "ITX.MC", "UCG.MI"]
     indices = {
         "CAC 40": ("https://en.wikipedia.org/wiki/CAC_40", "Ticker", ".PA"),
         "DAX 40": ("https://en.wikipedia.org/wiki/DAX", "Ticker", ".DE"),
-        "IBEX 35": ("https://en.wikipedia.org/wiki/IBEX_35", "Ticker", ".MC"),
-        "FTSE MIB": ("https://en.wikipedia.org/wiki/FTSE_MIB", "Ticker", ".MI")
+        "IBEX 35": ("https://en.wikipedia.org/wiki/IBEX_35", "Ticker", ".MC")
     }
     all_tickers = []
-    for name, (url, col, suffix) in indices.items():
-        try:
+    try:
+        for name, (url, col, suffix) in indices.items():
             tables = pd.read_html(url)
             for t in tables:
                 if col in t.columns:
                     raw = t[col].tolist()
                     all_tickers.extend([str(tk).split('.')[0] + suffix for tk in raw])
                     break
-        except: continue
-    return sorted(list(set(all_tickers)))
+        
+        # Si le scraping n'a rien donné, on utilise le fallback
+        return sorted(list(set(all_tickers))) if all_tickers else fallback
+    except Exception:
+        return fallback
 
 BASE_LIST = get_european_tickers()
+
+# --- DANS LA SIDEBAR (Ligne 51 corrigée) ---
+# On vérifie que AIR.PA est bien présent avant de le mettre en défaut
+default_choice = ["AIR.PA"] if "AIR.PA" in BASE_LIST else [BASE_LIST[0]]
+
+selected_tickers = st.multiselect(
+    "Sélectionner dans les indices :", 
+    options=BASE_LIST, 
+    default=default_choice
+)
 
 # --- BARRE LATÉRALE (SIDEBAR) ---
 with st.sidebar:
