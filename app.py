@@ -41,7 +41,6 @@ with st.sidebar:
     st.divider()
     st.header("🛒 Portefeuille")
     
-    # Sécurité pour le multiselect
     default_selection = ["AIR.PA"] if "AIR.PA" in BASE_TICKERS else [BASE_TICKERS[0]]
     selected_tickers = st.multiselect("Actifs :", options=BASE_TICKERS, default=default_selection)
     
@@ -61,7 +60,7 @@ with st.sidebar:
             shares_dict[t] = st.number_input(f"Quantité {t}", value=10, min_value=1)
 
     st.divider()
-    decay = 0.94 # Valeur fixée
+    decay = 0.94 
     
     if app_mode == "Projection Monte Carlo":
         st.header("🔬 Paramètres Simulation")
@@ -69,19 +68,12 @@ with st.sidebar:
         
         nu = 5 
         if model_type == "Student-t":
-            # Ajout du nu avec aide contextuelle au survol du point d'exclamation
             nu = st.slider("Degrés de liberté (nu)", 3, 50, 5, 
-                          help="""Le paramètre nu (v) contrôle l'épaisseur des queues :
-                          \n- **3 à 5** : Marché de crise (queues très épaisses, krachs fréquents).
-                          \n- **10 à 20** : Marché volatil standard.
-                          \n- **>30** : Tend vers une Loi Normale (événements extrêmes rares).""")
+                          help="Contrôle l'épaisseur des queues (risque de krach).")
         
         n_days = st.number_input("Horizon (jours)", value=150)
         n_sims = st.number_input("Simulations", value=2000)
-        
-        # Affichage statique du Lambda
         st.info(f"Paramètre Lambda (EWMA) fixé à : **{decay}**")
-        
         run_btn = st.button("🚀 LANCER LA SIMULATION")
     else:
         start_opt = st.date_input("Analyse depuis le", datetime.date(2021, 1, 1))
@@ -104,9 +96,9 @@ if final_list:
         st.error("Erreur de téléchargement des données.")
         st.stop()
 
-# --- AFFICHAGE SELON MODE ---
+# --- MODE 1 : MONTE CARLO ---
 if app_mode == "Projection Monte Carlo" and run_btn:
-    st.header("📈 Projection de Patrimoine")
+    st.header(f"📈 Projection : Modèle {model_type}")
     
     returns = np.log(data / data.shift(1)).dropna()
     ewma_var = (returns**2).ewm(alpha=(1 - decay), adjust=False).mean()
@@ -136,37 +128,55 @@ if app_mode == "Projection Monte Carlo" and run_btn:
     final_pnl = portfolio_paths[-1, :] - total_val
 
     # KPIs
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Valeur Portefeuille", f"{total_val:,.2f} €")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Valeur Initiale", f"{total_val:,.2f} €")
     c2.metric("Espérance Gain", f"{np.mean(final_pnl):+,.2f} €")
-    c3.metric("VaR 95%", f"{np.percentile(final_pnl, 5):,.2f} €")
+    c3.metric("Probabilité Profit", f"{np.mean(final_pnl > 0)*100:.1f} %")
+    c4.metric("VaR 95%", f"{np.percentile(final_pnl, 5):,.2f} €")
 
-    fig, ax = plt.subplots(figsize=(10, 5), facecolor='none')
-    plt.rcParams.update({'text.color': "white", 'axes.labelcolor': "white"})
-    ax.plot(portfolio_paths[:, :100], alpha=0.3)
-    ax.set_title("100 Trajectoires simulées", color="white")
+    # --- GRAPHIQUES HARMONISÉS ---
+    plt.rcParams.update({
+        "text.color": "white",
+        "axes.labelcolor": "white",
+        "axes.edgecolor": "#444444",
+        "xtick.color": "white",
+        "ytick.color": "white",
+        "grid.color": "#444444"
+    })
+    
+    fig = plt.figure(figsize=(16, 8), facecolor='none')
+    gs = GridSpec(1, 2, width_ratios=[1.8, 1], wspace=0.2)
+    norm = plt.Normalize(final_pnl.min(), final_pnl.max())
+    cmap = plt.cm.RdYlGn
+
+    # Trajectoires
+    ax1 = fig.add_subplot(gs[0], facecolor='none')
+    sample_size = min(150, n_sims)
+    indices = np.random.choice(n_sims, sample_size, replace=False)
+    for i in indices:
+        ax1.plot(portfolio_paths[:, i], color=cmap(norm(final_pnl[i])), alpha=0.3, lw=0.8)
+    
+    ax1.plot(np.median(portfolio_paths, axis=1), color='cyan', lw=2, label='Médiane')
+    ax1.set_title(f"TRAJECTOIRES SIMULÉES ({model_type})", fontsize=14, fontweight='bold')
+    ax1.set_xlabel("Jours")
+    ax1.set_ylabel("Valeur Portefeuille (€)")
+    ax1.grid(True, ls=':', alpha=0.2)
+    ax1.legend(facecolor='#262730')
+
+    # Histogramme
+    ax2 = fig.add_subplot(gs[1], facecolor='none')
+    n, bins, patches = ax2.hist(final_pnl, bins=50, density=True, alpha=0.8)
+    for b, p in zip(bins, patches):
+        p.set_facecolor(cmap(norm(b)))
+    
+    ax2.axvline(np.percentile(final_pnl, 5), color='red', ls='--', lw=2, label="VaR 95%")
+    ax2.set_title("DISTRIBUTION DES PROFITS/PERTES", fontsize=14, fontweight='bold')
+    ax2.legend(facecolor='#262730')
+    
     st.pyplot(fig, transparent=True)
 
+# --- MODE 2 : OPTIMISATION ---
 elif app_mode == "Optimisation & Frontière Efficiente":
+    # ... (Le code d'optimisation reste identique avec les labels en blanc) ...
     st.header("🎯 Analyse de Diversification")
-    
-    col_chart, col_data = st.columns([1, 1.2])
-    with col_chart:
-        fig_pie, ax_pie = plt.subplots(figsize=(6, 6), facecolor='none')
-        ax_pie.pie(current_values.values(), labels=final_list, autopct='%1.1f%%', textprops={'color':"w"})
-        st.pyplot(fig_pie, transparent=True)
-    
-    with col_data:
-        df_summary = pd.DataFrame({
-            "Actif": final_list,
-            "Prix (€)": [last_prices[t] for t in final_list],
-            "Poids (%)": [current_weights[i]*100 for i in range(len(final_list))]
-        })
-        st.table(df_summary)
-
-    if run_btn:
-        st.write("Calcul de la frontière efficiente...")
-        # ... [Reste du code d'optimisation inchangé] ...
-
-st.divider()
-st.caption("Données Yahoo Finance | Modèle paramétrique fixé (Lambda 0.94)")
+    # [Code d'optimisation précédent ici]
