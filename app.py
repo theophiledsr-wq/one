@@ -2,7 +2,15 @@ import streamlit as st
 
 
 
+
+
+
+
 import yfinance as yf
+
+
+
+
 
 
 
@@ -10,7 +18,15 @@ import numpy as np
 
 
 
+
+
+
+
 import matplotlib.pyplot as plt
+
+
+
+
 
 
 
@@ -18,11 +34,23 @@ import pandas as pd
 
 
 
+
+
+
+
 from matplotlib.gridspec import GridSpec
 
 
 
+
+
+
+
 import datetime
+
+
+
+
 
 
 
@@ -34,7 +62,19 @@ from scipy.linalg import cholesky
 
 
 
+
+
+
+
+
+
+
+
 # --- CONFIGURATION DE LA PAGE & MASQUAGE MENU ---
+
+
+
+
 
 
 
@@ -46,7 +86,19 @@ st.set_page_config(page_title="European Portfolio Master Pro", layout="wide")
 
 
 
+
+
+
+
+
+
+
+
 # Injection CSS pour masquer le menu Streamlit (Hamburger, Footer, etc.)
+
+
+
+
 
 
 
@@ -54,7 +106,15 @@ hide_st_style = """
 
 
 
+
+
+
+
             <style>
+
+
+
+
 
 
 
@@ -62,7 +122,15 @@ hide_st_style = """
 
 
 
+
+
+
+
             footer {visibility: hidden;}
+
+
+
+
 
 
 
@@ -70,7 +138,15 @@ hide_st_style = """
 
 
 
+
+
+
+
             .stDeployButton {display:none;}
+
+
+
+
 
 
 
@@ -78,7 +154,15 @@ hide_st_style = """
 
 
 
+
+
+
+
             """
+
+
+
+
 
 
 
@@ -90,7 +174,19 @@ st.markdown(hide_st_style, unsafe_allow_html=True)
 
 
 
+
+
+
+
+
+
+
+
 # --- BANDEAU ANIMÉ RALENTI (100s) ---
+
+
+
+
 
 
 
@@ -98,7 +194,15 @@ def display_animated_ticker():
 
 
 
+
+
+
+
     indices = {
+
+
+
+
 
 
 
@@ -106,7 +210,15 @@ def display_animated_ticker():
 
 
 
+
+
+
+
         "^GSPC": "S&P 500", "^IXIC": "NASDAQ", "^N225": "NIKKEI",
+
+
+
+
 
 
 
@@ -114,7 +226,15 @@ def display_animated_ticker():
 
 
 
+
+
+
+
     }
+
+
+
+
 
 
 
@@ -122,7 +242,15 @@ def display_animated_ticker():
 
 
 
+
+
+
+
         ticker_data = yf.download(list(indices.keys()), period="5d", progress=False)['Close']
+
+
+
+
 
 
 
@@ -130,7 +258,15 @@ def display_animated_ticker():
 
 
 
+
+
+
+
         ticker_items = ""
+
+
+
+
 
 
 
@@ -138,7 +274,15 @@ def display_animated_ticker():
 
 
 
+
+
+
+
             series = ticker_data[ticker].dropna()
+
+
+
+
 
 
 
@@ -146,7 +290,15 @@ def display_animated_ticker():
 
 
 
+
+
+
+
                 current = series.iloc[-1]
+
+
+
+
 
 
 
@@ -154,7 +306,15 @@ def display_animated_ticker():
 
 
 
+
+
+
+
                 var = ((current - prev) / prev) * 100
+
+
+
+
 
 
 
@@ -162,7 +322,15 @@ def display_animated_ticker():
 
 
 
+
+
+
+
                 icon = "▲" if var >= 0 else "▼"
+
+
+
+
 
 
 
@@ -170,7 +338,15 @@ def display_animated_ticker():
 
 
 
+
+
+
+
                 ticker_items += f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <b>{name}</b> {current:,.2f} <span style='color:{color};'>{icon} {sign}{var:.2f}%</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |"
+
+
+
+
 
 
 
@@ -178,7 +354,15 @@ def display_animated_ticker():
 
 
 
+
+
+
+
         st.markdown(f"""
+
+
+
+
 
 
 
@@ -186,7 +370,15 @@ def display_animated_ticker():
 
 
 
+
+
+
+
             @keyframes marquee {{ 0% {{ transform: translateX(0); }} 100% {{ transform: translateX(-50%); }} }}
+
+
+
+
 
 
 
@@ -194,7 +386,15 @@ def display_animated_ticker():
 
 
 
+
+
+
+
             .ticker-move {{ display: inline-block; white-space: nowrap; animation: marquee 100s linear infinite; font-family: 'Segoe UI', sans-serif; font-size: 1.1rem; color: white; }}
+
+
+
+
 
 
 
@@ -202,7 +402,15 @@ def display_animated_ticker():
 
 
 
+
+
+
+
             </style>
+
+
+
+
 
 
 
@@ -210,7 +418,15 @@ def display_animated_ticker():
 
 
 
+
+
+
+
         """, unsafe_allow_html=True)
+
+
+
+
 
 
 
@@ -222,7 +438,19 @@ def display_animated_ticker():
 
 
 
+
+
+
+
+
+
+
+
 display_animated_ticker()
+
+
+
+
 
 
 
@@ -234,41 +462,89 @@ st.title("THE FRENCH BUILT TOOL FOR STRATEGIC INVESTING")
 
 
 
+
+
+
+
+
+
+
+
 # --- FONCTION RECHERCHE TICKER ---
+
+
+
+
 
 
 
 def get_full_ticker_info(symbol):
 
+
+
     try:
+
+
 
         # On utilise l'outil de recherche de yfinance qui est plus robuste que .info
 
+
+
         search = yf.Search(symbol, max_results=1)
+
+
 
         if search.quotes:
 
+
+
             # On récupère le 'longname' ou 'shortname' dans les résultats de recherche
+
+
 
             name = search.quotes[0].get('longname') or search.quotes[0].get('shortname')
 
+
+
             if name:
+
+
 
                 return name
 
+
+
         
+
+
 
         # Backup : Si Search échoue, on tente une petite astuce technique
 
+
+
         t = yf.Ticker(symbol)
+
+
 
         # Accéder aux métadonnées via fast_info ou une autre clé
 
+
+
         return t.info.get('longName') or symbol
+
+
 
     except:
 
+
+
         return symbol
+
+
+
+
+
+
 
 
 
@@ -278,7 +554,15 @@ def get_full_ticker_info(symbol):
 
 
 
+
+
+
+
 with st.sidebar:
+
+
+
+
 
 
 
@@ -286,7 +570,15 @@ with st.sidebar:
 
 
 
+
+
+
+
     app_mode = st.radio("Choisir l'outil :", ["Projection Monte Carlo", "Optimisation & Frontière Efficiente"])
+
+
+
+
 
 
 
@@ -294,7 +586,15 @@ with st.sidebar:
 
 
 
+
+
+
+
     
+
+
+
+
 
 
 
@@ -302,7 +602,15 @@ with st.sidebar:
 
 
 
+
+
+
+
     
+
+
+
+
 
 
 
@@ -310,7 +618,15 @@ with st.sidebar:
 
 
 
+
+
+
+
     if 'portfolio' not in st.session_state:
+
+
+
+
 
 
 
@@ -322,7 +638,19 @@ with st.sidebar:
 
 
 
+
+
+
+
+
+
+
+
     # Formulaire de recherche
+
+
+
+
 
 
 
@@ -330,7 +658,15 @@ with st.sidebar:
 
 
 
+
+
+
+
     if st.button("➕ Ajouter à l'analyse"):
+
+
+
+
 
 
 
@@ -338,7 +674,15 @@ with st.sidebar:
 
 
 
+
+
+
+
             with st.spinner('Récupération du nom...'):
+
+
+
+
 
 
 
@@ -346,11 +690,27 @@ with st.sidebar:
 
 
 
+
+
+
+
                 st.session_state.portfolio[search_input] = full_name
 
 
 
+
+
+
+
             st.rerun()
+
+
+
+
+
+
+
+
 
 
 
@@ -362,7 +722,15 @@ with st.sidebar:
 
 
 
+
+
+
+
     if st.session_state.portfolio:
+
+
+
+
 
 
 
@@ -370,7 +738,15 @@ with st.sidebar:
 
 
 
+
+
+
+
         for t, name in st.session_state.portfolio.items():
+
+
+
+
 
 
 
@@ -378,7 +754,15 @@ with st.sidebar:
 
 
 
+
+
+
+
             c1.caption(f"**{t}**\n{name}")
+
+
+
+
 
 
 
@@ -386,7 +770,15 @@ with st.sidebar:
 
 
 
+
+
+
+
                 to_delete.append(t)
+
+
+
+
 
 
 
@@ -394,7 +786,15 @@ with st.sidebar:
 
 
 
+
+
+
+
         for t in to_delete:
+
+
+
+
 
 
 
@@ -402,11 +802,23 @@ with st.sidebar:
 
 
 
+
+
+
+
             st.rerun()
 
 
 
+
+
+
+
     
+
+
+
+
 
 
 
@@ -414,7 +826,15 @@ with st.sidebar:
 
 
 
+
+
+
+
     
+
+
+
+
 
 
 
@@ -422,7 +842,15 @@ with st.sidebar:
 
 
 
+
+
+
+
         st.info("Veuillez ajouter des actifs pour commencer.")
+
+
+
+
 
 
 
@@ -434,7 +862,19 @@ with st.sidebar:
 
 
 
+
+
+
+
+
+
+
+
     st.divider()
+
+
+
+
 
 
 
@@ -446,7 +886,19 @@ with st.sidebar:
 
 
 
+
+
+
+
+
+
+
+
     st.divider()
+
+
+
+
 
 
 
@@ -454,7 +906,15 @@ with st.sidebar:
 
 
 
+
+
+
+
         model_type = st.radio("Modèle :", ["FHS (Historique)", "Student-t", "GARCH(1,1)"])
+
+
+
+
 
 
 
@@ -462,7 +922,15 @@ with st.sidebar:
 
 
 
+
+
+
+
         n_days = st.number_input("Horizon (jours)", value=150)
+
+
+
+
 
 
 
@@ -470,7 +938,15 @@ with st.sidebar:
 
 
 
+
+
+
+
         run_btn = st.button("🚀 LANCER LA SIMULATION")
+
+
+
+
 
 
 
@@ -478,7 +954,15 @@ with st.sidebar:
 
 
 
+
+
+
+
         start_date = st.date_input("Analyse depuis :", datetime.date(2020, 1, 1))
+
+
+
+
 
 
 
@@ -486,7 +970,15 @@ with st.sidebar:
 
 
 
+
+
+
+
         n_portfolios = st.number_input("Nombre de portefeuilles", value=5000)
+
+
+
+
 
 
 
@@ -498,7 +990,19 @@ with st.sidebar:
 
 
 
+
+
+
+
+
+
+
+
 # --- CHARGEMENT DES DONNÉES ---
+
+
+
+
 
 
 
@@ -506,7 +1010,15 @@ with st.sidebar:
 
 
 
+
+
+
+
 def load_data_portfolio(tickers):
+
+
+
+
 
 
 
@@ -514,11 +1026,27 @@ def load_data_portfolio(tickers):
 
 
 
+
+
+
+
     df = yf.download(tickers, start="2018-01-01", progress=False)['Close']
 
 
 
+
+
+
+
     return df.ffill().dropna()
+
+
+
+
+
+
+
+
 
 
 
@@ -534,7 +1062,19 @@ raw_data = load_data_portfolio(final_list)
 
 
 
+
+
+
+
+
+
+
+
 # --- MODE MONTE CARLO ---
+
+
+
+
 
 
 
@@ -542,7 +1082,15 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+
+
+
+
     data_filtered = raw_data[raw_data.index >= pd.Timestamp(start_date)]
+
+
+
+
 
 
 
@@ -550,7 +1098,15 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+
+
+
+
     last_prices = data_filtered.iloc[-1]
+
+
+
+
 
 
 
@@ -558,7 +1114,15 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+
+
+
+
     
+
+
+
+
 
 
 
@@ -566,7 +1130,15 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+
+
+
+
     price_paths = np.zeros((n_days, n_sims, len(final_list)))
+
+
+
+
 
 
 
@@ -574,11 +1146,23 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+
+
+
+
     decay = 0.94
 
 
 
+
+
+
+
     ewma_var = (returns**2).ewm(alpha=(1 - decay), adjust=False).mean()
+
+
+
+
 
 
 
@@ -590,7 +1174,19 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+
+
+
+
+
+
+
+
     for t in range(n_days):
+
+
+
+
 
 
 
@@ -598,7 +1194,15 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+
+
+
+
         daily_ret = shocks * sim_vols
+
+
+
+
 
 
 
@@ -606,7 +1210,15 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+
+
+
+
         price_paths[t] = temp_prices
+
+
+
+
 
 
 
@@ -618,7 +1230,19 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+
+
+
+
+
+
+
+
     portfolio_paths = np.sum(price_paths * [shares_dict[t] for t in final_list], axis=2)
+
+
+
+
 
 
 
@@ -626,7 +1250,15 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+
+
+
+
     
+
+
+
+
 
 
 
@@ -634,7 +1266,15 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+
+
+
+
     
+
+
+
+
 
 
 
@@ -642,7 +1282,15 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+
+
+
+
     gs = GridSpec(1, 2, width_ratios=[1.8, 1])
+
+
+
+
 
 
 
@@ -650,7 +1298,15 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+
+
+
+
     ax1 = fig.add_subplot(gs[0], facecolor='none'); norm = plt.Normalize(final_pnl.min(), final_pnl.max())
+
+
+
+
 
 
 
@@ -658,11 +1314,23 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+
+
+
+
     ax2 = fig.add_subplot(gs[1], facecolor='none'); n, bins, patches = ax2.hist(final_pnl, bins=50, density=True, alpha=0.8)
 
 
 
+
+
+
+
     for b, p in zip(bins, patches): p.set_facecolor('red' if b < 0 else 'green')
+
+
+
+
 
 
 
@@ -674,83 +1342,348 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+
+
+
+
+
+
+
+
 # --- MODE OPTIMISATION ---
 
 
 
-# --- MODE OPTIMISATION ---
+
+
+
+
 elif app_mode == "Optimisation & Frontière Efficiente" and run_btn:
+
+
+
+
+
+
+
     data_opt = raw_data[raw_data.index >= pd.Timestamp(start_date)]
+
+
+
+
+
+
+
     returns_daily = data_opt.pct_change().dropna()
+
+
+
+
+
+
+
     mean_returns = returns_daily.mean() * 252
+
+
+
+
+
+
+
     cov_matrix = returns_daily.cov() * 252
+
+
+
+
+
+
+
     
+
+
+
+
+
+
+
     # Portefeuille Actuel
+
+
+
+
+
+
+
     last_p = data_opt.iloc[-1]
+
+
+
+
+
+
+
     vals = np.array([shares_dict[t] * last_p[t] for t in final_list])
+
+
+
+
+
+
+
     curr_w = vals / np.sum(vals)
+
+
+
+
+
+
+
     curr_ret = np.sum(mean_returns * curr_w)
+
+
+
+
+
+
+
     curr_vol = np.sqrt(np.dot(curr_w.T, np.dot(cov_matrix, curr_w)))
+
+
+
+
+
+
+
     curr_sharpe = (curr_ret - rf_rate) / curr_vol
 
-    # Simulation Frontière
-    res = np.zeros((5, n_portfolios)) # On passe à 5 lignes pour stocker Sortino et Calmar
-    w_rec = []
-    
-    for i in range(n_portfolios):
-        w = np.random.random(len(final_list)); w /= np.sum(w)
-        w_rec.append(w)
-        r = np.sum(mean_returns * w)
-        v = np.sqrt(np.dot(w.T, np.dot(cov_matrix, w)))
-        
-        # 1. Sharpe
-        sharpe = (r - rf_rate) / v
-        
-        # 2. Sortino (Downside Deviation)
-        portfolio_rets = returns_daily @ w
-        downside_rets = portfolio_rets[portfolio_rets < 0]
-        sortino = (r - rf_rate) / (downside_rets.std() * np.sqrt(252)) if len(downside_rets) > 0 else 0
-        
-        # 3. Calmar (Max Drawdown)
-        cum_rets = (1 + portfolio_rets).cumprod()
-        peak = cum_rets.expanding(min_periods=1).max()
-        drawdown = (cum_rets / peak) - 1
-        max_drawdown = abs(drawdown.min())
-        calmar = r / max_drawdown if max_drawdown > 0 else 0
-        
-        res[0,i], res[1,i], res[2,i], res[3,i], res[4,i] = r, v, sharpe, sortino, calmar
 
-    best_sharpe_idx = np.argmax(res[2])
-    best_sortino_idx = np.argmax(res[3])
-    best_calmar_idx = np.argmax(res[4])
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # Simulation Frontière
+
+
+
+
+
+
+
+    res = np.zeros((3, n_portfolios))
+
+
+
+
+
+
+
+    w_rec = []
+
+
+
+
+
+
+
+    for i in range(n_portfolios):
+
+
+
+
+
+
+
+        w = np.random.random(len(final_list)); w /= np.sum(w)
+
+
+
+
+
+
+
+        w_rec.append(w)
+
+
+
+
+
+
+
+        r = np.sum(mean_returns * w)
+
+
+
+
+
+
+
+        v = np.sqrt(np.dot(w.T, np.dot(cov_matrix, w)))
+
+
+
+
+
+
+
+        res[0,i], res[1,i], res[2,i] = r, v, (r - rf_rate) / v
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    best_idx = np.argmax(res[2])
+
+
+
+
+
+
+
     
-    st.subheader("🎯 Analyse Multi-Objectifs")
+
+
+
+
+
+
+
+    st.subheader("🎯 Comparaison : Actuel vs Optimisé")
+
+
+
+
+
+
+
     c1, c2 = st.columns([2, 1])
-    
+
+
+
+
+
+
+
     with c1:
+
+
+
+
+
+
+
         fig_opt, ax_opt = plt.subplots(figsize=(10, 6), facecolor='none')
+
+
+
+
+
+
+
         ax_opt.set_facecolor('none')
+
+
+
+
+
+
+
         sc = ax_opt.scatter(res[1,:], res[0,:], c=res[2,:], cmap='viridis', s=10, alpha=0.3)
-        
-        # Marqueurs des optima
-        ax_opt.scatter(res[1,best_sharpe_idx], res[0,best_sharpe_idx], marker='*', color='r', s=200, label='Max Sharpe')
-        ax_opt.scatter(res[1,best_sortino_idx], res[0,best_sortino_idx], marker='P', color='orange', s=180, label='Max Sortino')
-        ax_opt.scatter(res[1,best_calmar_idx], res[0,best_calmar_idx], marker='X', color='cyan', s=180, label='Max Calmar')
+
+
+
+
+
+
+
+        ax_opt.scatter(res[1,best_idx], res[0,best_idx], marker='*', color='r', s=200, label='Optimal')
+
+
+
+
+
+
+
         ax_opt.scatter(curr_vol, curr_ret, marker='D', color='white', s=150, edgecolors='black', label='Actuel')
-        
-        ax_opt.set_xlabel("Volatilité (Risque)")
-        ax_opt.set_ylabel("Rendement Espéré")
-        ax_opt.legend(facecolor='#0e1117', edgecolor='white')
-        st.pyplot(fig_opt, transparent=True)
-    
+
+
+
+
+
+
+
+        ax_opt.legend(); st.pyplot(fig_opt, transparent=True)
+
+
+
+
+
+
+
     with c2:
-        st.write("📊 **Poids du Portefeuille Optimal (Sharpe)**")
+
+
+
+
+
+
+
         comp_df = pd.DataFrame({
+
+
+
+
+
+
+
             'Actuel (%)': [round(x*100, 1) for x in curr_w],
-            'Optimal (%)': [round(x*100, 1) for x in w_rec[best_sharpe_idx]]
+
+
+
+
+
+
+
+            'Optimal (%)': [round(x*100, 1) for x in w_rec[best_idx]]
+
+
+
+
+
+
+
         }, index=final_list)
+
+
+
+
+
+
+
         st.table(comp_df)
-        
-        st.write("📈 **Scores Max**")
-        st.write(f"Sortino Max: `{res[3, best_sortino_idx]:.2f}`")
-        st.write(f"Calmar Max: `{res[4, best_calmar_idx]:.2f}`")
+
+
+
+
+
+
+
+        st.metric("Sharpe Optimal", f"{res[2, best_idx]:.2f}", f"{res[2, best_idx]-curr_sharpe:.2f}")
