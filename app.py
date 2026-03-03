@@ -10,7 +10,6 @@ from scipy.linalg import cholesky
 # --- CONFIGURATION DE LA PAGE & MASQUAGE MENU ---
 st.set_page_config(page_title="European Portfolio Master Pro", layout="wide")
 
-# Injection CSS pour masquer le menu Streamlit (Hamburger, Footer, etc.)
 hide_st_style = """
             <style>
             #MainMenu {visibility: hidden;}
@@ -61,7 +60,9 @@ st.title("THE FRENCH BUILT TOOL FOR STRATEGIC INVESTING")
 def get_full_ticker_info(symbol):
     try:
         t = yf.Ticker(symbol)
-        return t.info.get('longName', symbol)
+        # On essaie de prendre le nom long, sinon le court, sinon le symbole par défaut
+        name = t.info.get('longName') or t.info.get('shortName') or symbol
+        return name
     except:
         return symbol
 
@@ -73,26 +74,27 @@ with st.sidebar:
     
     st.header("🛒 Portefeuille")
     
-    # Initialisation du stockage portefeuille
     if 'portfolio' not in st.session_state:
         st.session_state.portfolio = {} # {Ticker: Nom_Complet}
 
-    # Formulaire de recherche
-    search_input = st.text_input("Rechercher un Ticker (ex: AAPL, MC.PA, NESN.SW) :").upper()
+    search_input = st.text_input("Ajouter un Ticker (ex: AAPL, MC.PA) :").upper().strip()
+    
     if st.button("➕ Ajouter à l'analyse"):
-        if search_input:
+        if search_input and search_input not in st.session_state.portfolio:
             with st.spinner('Récupération du nom...'):
                 full_name = get_full_ticker_info(search_input)
                 st.session_state.portfolio[search_input] = full_name
             st.rerun()
 
-    # Affichage et gestion de la liste
+    # Affichage de la liste avec NOM COMPLET
     if st.session_state.portfolio:
         to_delete = []
+        st.write("### Vos actifs :")
         for t, name in st.session_state.portfolio.items():
             c1, c2 = st.columns([4, 1])
-            c1.caption(f"**{t}**\n{name}")
-            if c2.button("**-**", key=f"del_{t}"):
+            # Affiche le Nom Complet en gras et le Ticker en petit
+            c1.markdown(f"**{name}** \n<small>{t}</small>", unsafe_allow_html=True)
+            if c2.button("🗑️", key=f"del_{t}"):
                 to_delete.append(t)
         
         for t in to_delete:
@@ -106,7 +108,8 @@ with st.sidebar:
         st.stop()
 
     st.divider()
-    shares_dict = {t: st.number_input(f"Qte {t}", value=10, min_value=1) for t in final_list}
+    # On utilise le nom complet dans l'étiquette du champ de saisie des quantités
+    shares_dict = {t: st.number_input(f"Qté : {st.session_state.portfolio[t]}", value=10, min_value=1) for t in final_list}
 
     st.divider()
     if app_mode == "Projection Monte Carlo":
@@ -124,8 +127,9 @@ with st.sidebar:
 # --- CHARGEMENT DES DONNÉES ---
 @st.cache_data
 def load_data_portfolio(tickers):
-    # On télécharge les prix de clôture
     df = yf.download(tickers, start="2018-01-01", progress=False)['Close']
+    if isinstance(df, pd.Series): # Cas où il n'y a qu'un seul ticker
+        df = df.to_frame()
     return df.ffill().dropna()
 
 raw_data = load_data_portfolio(final_list)
@@ -137,7 +141,6 @@ if app_mode == "Projection Monte Carlo" and run_btn:
     last_prices = data_filtered.iloc[-1]
     total_val = sum(last_prices[t] * shares_dict[t] for t in final_list)
     
-    # Simulation
     price_paths = np.zeros((n_days, n_sims, len(final_list)))
     temp_prices = np.tile(last_prices.values, (n_sims, 1))
     decay = 0.94
@@ -172,7 +175,6 @@ elif app_mode == "Optimisation & Frontière Efficiente" and run_btn:
     mean_returns = returns_daily.mean() * 252
     cov_matrix = returns_daily.cov() * 252
     
-    # Portefeuille Actuel
     last_p = data_opt.iloc[-1]
     vals = np.array([shares_dict[t] * last_p[t] for t in final_list])
     curr_w = vals / np.sum(vals)
@@ -180,7 +182,6 @@ elif app_mode == "Optimisation & Frontière Efficiente" and run_btn:
     curr_vol = np.sqrt(np.dot(curr_w.T, np.dot(cov_matrix, curr_w)))
     curr_sharpe = (curr_ret - rf_rate) / curr_vol
 
-    # Simulation Frontière
     res = np.zeros((3, n_portfolios))
     w_rec = []
     for i in range(n_portfolios):
@@ -202,9 +203,11 @@ elif app_mode == "Optimisation & Frontière Efficiente" and run_btn:
         ax_opt.scatter(curr_vol, curr_ret, marker='D', color='white', s=150, edgecolors='black', label='Actuel')
         ax_opt.legend(); st.pyplot(fig_opt, transparent=True)
     with c2:
+        # Utilisation des noms complets pour l'index du tableau récapitulatif
+        display_names = [st.session_state.portfolio[t] for t in final_list]
         comp_df = pd.DataFrame({
             'Actuel (%)': [round(x*100, 1) for x in curr_w],
             'Optimal (%)': [round(x*100, 1) for x in w_rec[best_idx]]
-        }, index=final_list)
+        }, index=display_names)
         st.table(comp_df)
         st.metric("Sharpe Optimal", f"{res[2, best_idx]:.2f}", f"{res[2, best_idx]-curr_sharpe:.2f}")
