@@ -59,23 +59,20 @@ st.title("THE FRENCH BUILT TOOL FOR STRATEGIC INVESTING")
 # --- FONCTION RECHERCHE TICKER ---
 def get_full_ticker_info(symbol):
     try:
-        t = yf.Ticker(symbol)
-        # 1. On tente le longName dans .info
-        name = t.info.get('longName')
+        # On utilise l'outil de recherche de yfinance qui est plus robuste que .info
+        search = yf.Search(symbol, max_results=1)
+        if search.quotes:
+            # On récupère le 'longname' ou 'shortname' dans les résultats de recherche
+            name = search.quotes[0].get('longname') or search.quotes[0].get('shortname')
+            if name:
+                return name
         
-        # 2. Si c'est vide, on tente le shortName
-        if not name:
-            name = t.info.get('shortName')
-            
-        # 3. Si c'est toujours vide, on utilise une autre méthode (history)
-        # pour forcer la récupération des métadonnées
-        if not name:
-            _ = t.history(period="1d") # Force le chargement
-            name = t.info.get('longName') or symbol
-            
-        return name
+        # Backup : Si Search échoue, on tente une petite astuce technique
+        t = yf.Ticker(symbol)
+        # Accéder aux métadonnées via fast_info ou une autre clé
+        return t.info.get('longName') or symbol
     except:
-        return symbol # Retourne au moins le ticker si tout échoue
+        return symbol #Retourne au moins le ticker si tout échoue
 
 # --- SIDEBAR & RECHERCHE INTELLIGENTE ---
 with st.sidebar:
