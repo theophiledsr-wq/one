@@ -7,8 +7,19 @@ from matplotlib.gridspec import GridSpec
 import datetime
 from scipy.linalg import cholesky
 
-# --- CONFIGURATION DE LA PAGE ---
+# --- CONFIGURATION DE LA PAGE & MASQUAGE MENU ---
 st.set_page_config(page_title="European Portfolio Master Pro", layout="wide")
+
+# Injection CSS pour masquer le menu Streamlit (Hamburger, Footer, etc.)
+hide_st_style = """
+            <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            header {visibility: hidden;}
+            .stDeployButton {display:none;}
+            </style>
+            """
+st.markdown(hide_st_style, unsafe_allow_html=True)
 
 # --- BANDEAU ANIMÉ RALENTI (100s) ---
 def display_animated_ticker():
@@ -46,89 +57,95 @@ def display_animated_ticker():
 display_animated_ticker()
 st.title("THE FRENCH BUILT TOOL FOR STRATEGIC INVESTING")
 
-# --- RÉCUPÉRATION DES TICKERS ---
-@st.cache_data
-def get_european_base_list():
+# --- FONCTION RECHERCHE TICKER ---
+def get_full_ticker_info(symbol):
     try:
-        fallback = ["AIR.PA", "MC.PA", "OR.PA", "SAP.DE", "ASML.AS"]
-        indices = {"CAC 40": "https://en.wikipedia.org/wiki/CAC_40", "DAX 40": "https://en.wikipedia.org/wiki/DAX"}
-        tickers = []
-        for url in indices.values():
-            tables = pd.read_html(url)
-            for t in tables:
-                if 'Ticker' in t.columns:
-                    suffix = ".PA" if "CAC" in url else ".DE"
-                    tickers.extend([str(tk).split('.')[0] + suffix for tk in t['Ticker'].tolist()])
-                    break
-        return sorted(list(set(tickers))) if tickers else fallback
-    except: return ["AIR.PA", "MC.PA", "OR.PA", "SAP.DE", "ASML.AS"]
+        t = yf.Ticker(symbol)
+        return t.info.get('longName', symbol)
+    except:
+        return symbol
 
-BASE_LIST = get_european_base_list()
-
-# --- SIDEBAR ---
+# --- SIDEBAR & RECHERCHE INTELLIGENTE ---
 with st.sidebar:
     st.header("🧭 Navigation")
     app_mode = st.radio("Choisir l'outil :", ["Projection Monte Carlo", "Optimisation & Frontière Efficiente"])
     st.divider()
+    
     st.header("🛒 Portefeuille")
-    selected_tickers = st.multiselect("Sélectionner :", options=BASE_LIST, default=[BASE_LIST[0]])
-    manual_t = st.text_input("Ajout manuel :").upper()
-    if 'manual_list' not in st.session_state: st.session_state.manual_list = []
-    if st.button("➕ Ajouter"):
-        if manual_t and manual_t not in st.session_state.manual_list:
-            st.session_state.manual_list.append(manual_t); st.rerun()
+    
+    # Initialisation du stockage portefeuille
+    if 'portfolio' not in st.session_state:
+        st.session_state.portfolio = {} # {Ticker: Nom_Complet}
 
-    final_list = list(set(selected_tickers + st.session_state.manual_list))
-    if not final_list: st.stop()
-    shares_dict = {t: st.number_input(f"Quantité {t}", value=10, min_value=1) for t in final_list}
+    # Formulaire de recherche
+    search_input = st.text_input("Rechercher un Ticker (ex: AAPL, MC.PA, NESN.SW) :").upper()
+    if st.button("➕ Ajouter à l'analyse"):
+        if search_input:
+            with st.spinner('Récupération du nom...'):
+                full_name = get_full_ticker_info(search_input)
+                st.session_state.portfolio[search_input] = full_name
+            st.rerun()
+
+    # Affichage et gestion de la liste
+    if st.session_state.portfolio:
+        to_delete = []
+        for t, name in st.session_state.portfolio.items():
+            c1, c2 = st.columns([4, 1])
+            c1.caption(f"**{t}**\n{name}")
+            if c2.button("🗑️", key=f"del_{t}"):
+                to_delete.append(t)
+        
+        for t in to_delete:
+            del st.session_state.portfolio[t]
+            st.rerun()
+    
+    final_list = list(st.session_state.portfolio.keys())
+    
+    if not final_list:
+        st.info("Veuillez ajouter des actifs pour commencer.")
+        st.stop()
+
+    st.divider()
+    shares_dict = {t: st.number_input(f"Qte {t}", value=10, min_value=1) for t in final_list}
 
     st.divider()
     if app_mode == "Projection Monte Carlo":
         model_type = st.radio("Modèle :", ["FHS (Historique)", "Student-t", "GARCH(1,1)"])
-        start_mc = st.date_input("Historique depuis :", datetime.date(2021, 1, 1))
-        nu_val = st.slider("nu (v)", 3, 50, 5) if model_type == "Student-t" else 5
+        start_date = st.date_input("Historique depuis :", datetime.date(2021, 1, 1))
         n_days = st.number_input("Horizon (jours)", value=150)
         n_sims = st.number_input("Simulations", value=2000)
         run_btn = st.button("🚀 LANCER LA SIMULATION")
     else:
-        start_opt = st.date_input("Analyse depuis :", datetime.date(2020, 1, 1))
+        start_date = st.date_input("Analyse depuis :", datetime.date(2020, 1, 1))
         rf_rate = st.number_input("Taux sans risque (%)", value=3.0) / 100
         n_portfolios = st.number_input("Nombre de portefeuilles", value=5000)
         run_btn = st.button("🎯 GÉNÉRER LA FRONTIÈRE")
 
-# --- DATA ---
+# --- CHARGEMENT DES DONNÉES ---
 @st.cache_data
 def load_data_portfolio(tickers):
-    df = yf.download(tickers + ["^GSPC"], start="2018-01-01")['Close']
+    # On télécharge les prix de clôture
+    df = yf.download(tickers, start="2018-01-01", progress=False)['Close']
     return df.ffill().dropna()
 
 raw_data = load_data_portfolio(final_list)
 
-# --- MODE MONTE CARLO (Même logique que précédemment) ---
+# --- MODE MONTE CARLO ---
 if app_mode == "Projection Monte Carlo" and run_btn:
-    data_filtered = raw_data[raw_data.index >= pd.Timestamp(start_mc)][final_list]
+    data_filtered = raw_data[raw_data.index >= pd.Timestamp(start_date)]
     returns = np.log(data_filtered / data_filtered.shift(1)).dropna()
     last_prices = data_filtered.iloc[-1]
     total_val = sum(last_prices[t] * shares_dict[t] for t in final_list)
     
+    # Simulation
     price_paths = np.zeros((n_days, n_sims, len(final_list)))
     temp_prices = np.tile(last_prices.values, (n_sims, 1))
     decay = 0.94
     ewma_var = (returns**2).ewm(alpha=(1 - decay), adjust=False).mean()
     sim_vols = np.tile(np.sqrt(ewma_var.iloc[-1].values), (n_sims, 1))
 
-    if model_type == "Student-t":
-        L = cholesky(returns.corr().values + np.eye(len(final_list))*1e-8, lower=True)
-    
     for t in range(n_days):
-        if model_type == "FHS (Historique)":
-            std_rets = (returns / np.sqrt(ewma_var.shift(1))).dropna()
-            shocks = std_rets.sample(n_sims, replace=True).values
-        elif model_type == "Student-t":
-            t_samples = np.random.standard_t(df=nu_val, size=(n_sims, len(final_list)))
-            shocks = (t_samples @ L.T) * np.sqrt((nu_val - 2) / nu_val)
-        else: # GARCH simplified
-            shocks = np.random.normal(0, 1, size=(n_sims, len(final_list)))
+        shocks = np.random.normal(0, 1, size=(n_sims, len(final_list)))
         daily_ret = shocks * sim_vols
         temp_prices *= np.exp(daily_ret)
         price_paths[t] = temp_prices
@@ -136,7 +153,9 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
     portfolio_paths = np.sum(price_paths * [shares_dict[t] for t in final_list], axis=2)
     final_pnl = portfolio_paths[-1, :] - total_val
+    
     st.columns(3)[1].metric(f"Issue Médiane", f"{np.median(final_pnl):,.2f} €", f"{(np.median(final_pnl)/total_val)*100:.2f} %")
+    
     fig = plt.figure(figsize=(16, 7), facecolor='none')
     gs = GridSpec(1, 2, width_ratios=[1.8, 1])
     plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
@@ -146,71 +165,46 @@ if app_mode == "Projection Monte Carlo" and run_btn:
     for b, p in zip(bins, patches): p.set_facecolor('red' if b < 0 else 'green')
     st.pyplot(fig, transparent=True)
 
-# --- MODE OPTIMISATION + COMPOSITION ACTUELLE ---
+# --- MODE OPTIMISATION ---
 elif app_mode == "Optimisation & Frontière Efficiente" and run_btn:
-    data_opt = raw_data[raw_data.index >= pd.Timestamp(start_opt)][final_list]
+    data_opt = raw_data[raw_data.index >= pd.Timestamp(start_date)]
     returns_daily = data_opt.pct_change().dropna()
     mean_returns = returns_daily.mean() * 252
     cov_matrix = returns_daily.cov() * 252
     
-    # --- 1. CALCUL DU PORTEFEUILLE ACTUEL ---
-    last_prices = data_opt.iloc[-1]
-    values = np.array([shares_dict[t] * last_prices[t] for t in final_list])
-    current_weights = values / np.sum(values)
-    
-    current_return = np.sum(mean_returns * current_weights)
-    current_vol = np.sqrt(np.dot(current_weights.T, np.dot(cov_matrix, current_weights)))
-    current_sharpe = (current_return - rf_rate) / current_vol
+    # Portefeuille Actuel
+    last_p = data_opt.iloc[-1]
+    vals = np.array([shares_dict[t] * last_p[t] for t in final_list])
+    curr_w = vals / np.sum(vals)
+    curr_ret = np.sum(mean_returns * curr_w)
+    curr_vol = np.sqrt(np.dot(curr_w.T, np.dot(cov_matrix, curr_w)))
+    curr_sharpe = (curr_ret - rf_rate) / curr_vol
 
-    # --- 2. SIMULATION DE LA FRONTIÈRE ---
-    results = np.zeros((3, n_portfolios))
-    weights_record = []
+    # Simulation Frontière
+    res = np.zeros((3, n_portfolios))
+    w_rec = []
     for i in range(n_portfolios):
-        weights = np.random.random(len(final_list))
-        weights /= np.sum(weights)
-        weights_record.append(weights)
-        p_ret = np.sum(mean_returns * weights)
-        p_vol = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
-        results[0,i] = p_ret
-        results[1,i] = p_vol
-        results[2,i] = (p_ret - rf_rate) / p_vol
+        w = np.random.random(len(final_list)); w /= np.sum(w)
+        w_rec.append(w)
+        r = np.sum(mean_returns * w)
+        v = np.sqrt(np.dot(w.T, np.dot(cov_matrix, w)))
+        res[0,i], res[1,i], res[2,i] = r, v, (r - rf_rate) / v
 
-    max_sharpe_idx = np.argmax(results[2])
+    best_idx = np.argmax(res[2])
     
-    # --- 3. AFFICHAGE ---
     st.subheader("🎯 Comparaison : Actuel vs Optimisé")
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
+    c1, c2 = st.columns([2, 1])
+    with c1:
         fig_opt, ax_opt = plt.subplots(figsize=(10, 6), facecolor='none')
         ax_opt.set_facecolor('none')
-        # Nuage de points
-        sc = ax_opt.scatter(results[1,:], results[0,:], c=results[2,:], cmap='viridis', s=10, alpha=0.3)
-        # Point Max Sharpe
-        ax_opt.scatter(results[1,max_sharpe_idx], results[0,max_sharpe_idx], marker='*', color='r', s=200, label='Optimal (Max Sharpe)')
-        # Point ACTUEL
-        ax_opt.scatter(current_vol, current_return, marker='D', color='white', s=150, edgecolors='black', label='TON PORTEFEUILLE')
-        
-        ax_opt.set_title("Frontière Efficiente", color='white')
-        ax_opt.set_xlabel("Volatilité Annuelle", color='white')
-        ax_opt.set_ylabel("Rendement Annuel", color='white')
-        plt.colorbar(sc, label='Ratio de Sharpe')
-        ax_opt.legend(facecolor='#0e1117', edgecolor='white')
-        st.pyplot(fig_opt, transparent=True)
-
-    with col2:
-        st.write("📊 **Allocation des Poids (%)**")
-        comparison_df = pd.DataFrame({
-            'Actif': final_list,
-            'Actuel (%)': [round(x*100, 1) for x in current_weights],
-            'Optimisé (%)': [round(x*100, 1) for x in weights_record[max_sharpe_idx]]
-        })
-        st.table(comparison_df.set_index('Actif'))
-        
-        # Comparaison des métriques
-        c_m1, c_m2 = st.columns(2)
-        c_m1.metric("Sharpe Actuel", f"{current_sharpe:.2f}")
-        c_m2.metric("Sharpe Optimal", f"{results[2, max_sharpe_idx]:.2f}", f"{results[2, max_sharpe_idx] - current_sharpe:.2f}")
-        
-        st.divider()
-        st.info("💡 Le point blanc (diamant) représente ta position actuelle. Plus il est proche de l'étoile rouge, plus ton portefeuille est optimisé pour le risque.")
+        sc = ax_opt.scatter(res[1,:], res[0,:], c=res[2,:], cmap='viridis', s=10, alpha=0.3)
+        ax_opt.scatter(res[1,best_idx], res[0,best_idx], marker='*', color='r', s=200, label='Optimal')
+        ax_opt.scatter(curr_vol, curr_ret, marker='D', color='white', s=150, edgecolors='black', label='Actuel')
+        ax_opt.legend(); st.pyplot(fig_opt, transparent=True)
+    with c2:
+        comp_df = pd.DataFrame({
+            'Actuel (%)': [round(x*100, 1) for x in curr_w],
+            'Optimal (%)': [round(x*100, 1) for x in w_rec[best_idx]]
+        }, index=final_list)
+        st.table(comp_df)
+        st.metric("Sharpe Optimal", f"{res[2, best_idx]:.2f}", f"{res[2, best_idx]-curr_sharpe:.2f}")
