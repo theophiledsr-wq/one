@@ -61,7 +61,7 @@ def get_full_ticker_info(symbol):
     try:
         t = yf.Ticker(symbol)
         # On essaie de prendre le nom long, sinon le court, sinon le symbole par défaut
-        name = t.info.get('longName') or t.info.get('shortName') or symbol
+        name = t.info.get('longName') 
         return name
     except:
         return symbol
