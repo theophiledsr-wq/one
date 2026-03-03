@@ -92,7 +92,7 @@ with st.sidebar:
         for t, name in st.session_state.portfolio.items():
             c1, c2 = st.columns([4, 1])
             c1.caption(f"**{t}**\n{name}")
-            if c2.button("🗑️", key=f"del_{t}"):
+            if c2.button("**-**", key=f"del_{t}"):
                 to_delete.append(t)
         
         for t in to_delete:
