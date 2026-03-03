@@ -678,168 +678,79 @@ if app_mode == "Projection Monte Carlo" and run_btn:
 
 
 
+# --- MODE OPTIMISATION ---
 elif app_mode == "Optimisation & Frontière Efficiente" and run_btn:
-
-
-
     data_opt = raw_data[raw_data.index >= pd.Timestamp(start_date)]
-
-
-
     returns_daily = data_opt.pct_change().dropna()
-
-
-
     mean_returns = returns_daily.mean() * 252
-
-
-
     cov_matrix = returns_daily.cov() * 252
-
-
-
     
-
-
-
     # Portefeuille Actuel
-
-
-
     last_p = data_opt.iloc[-1]
-
-
-
     vals = np.array([shares_dict[t] * last_p[t] for t in final_list])
-
-
-
     curr_w = vals / np.sum(vals)
-
-
-
     curr_ret = np.sum(mean_returns * curr_w)
-
-
-
     curr_vol = np.sqrt(np.dot(curr_w.T, np.dot(cov_matrix, curr_w)))
-
-
-
     curr_sharpe = (curr_ret - rf_rate) / curr_vol
 
-
-
-
-
-
-
     # Simulation Frontière
-
-
-
-    res = np.zeros((3, n_portfolios))
-
-
-
+    res = np.zeros((5, n_portfolios)) # On passe à 5 lignes pour stocker Sortino et Calmar
     w_rec = []
-
-
-
-    for i in range(n_portfolios):
-
-
-
-        w = np.random.random(len(final_list)); w /= np.sum(w)
-
-
-
-        w_rec.append(w)
-
-
-
-        r = np.sum(mean_returns * w)
-
-
-
-        v = np.sqrt(np.dot(w.T, np.dot(cov_matrix, w)))
-
-
-
-        res[0,i], res[1,i], res[2,i] = r, v, (r - rf_rate) / v
-
-
-
-
-
-
-
-    best_idx = np.argmax(res[2])
-
-
-
     
+    for i in range(n_portfolios):
+        w = np.random.random(len(final_list)); w /= np.sum(w)
+        w_rec.append(w)
+        r = np.sum(mean_returns * w)
+        v = np.sqrt(np.dot(w.T, np.dot(cov_matrix, w)))
+        
+        # 1. Sharpe
+        sharpe = (r - rf_rate) / v
+        
+        # 2. Sortino (Downside Deviation)
+        portfolio_rets = returns_daily @ w
+        downside_rets = portfolio_rets[portfolio_rets < 0]
+        sortino = (r - rf_rate) / (downside_rets.std() * np.sqrt(252)) if len(downside_rets) > 0 else 0
+        
+        # 3. Calmar (Max Drawdown)
+        cum_rets = (1 + portfolio_rets).cumprod()
+        peak = cum_rets.expanding(min_periods=1).max()
+        drawdown = (cum_rets / peak) - 1
+        max_drawdown = abs(drawdown.min())
+        calmar = r / max_drawdown if max_drawdown > 0 else 0
+        
+        res[0,i], res[1,i], res[2,i], res[3,i], res[4,i] = r, v, sharpe, sortino, calmar
 
-
-
-    st.subheader("🎯 Comparaison : Actuel vs Optimisé")
-
-
-
+    best_sharpe_idx = np.argmax(res[2])
+    best_sortino_idx = np.argmax(res[3])
+    best_calmar_idx = np.argmax(res[4])
+    
+    st.subheader("🎯 Analyse Multi-Objectifs")
     c1, c2 = st.columns([2, 1])
-
-
-
+    
     with c1:
-
-
-
         fig_opt, ax_opt = plt.subplots(figsize=(10, 6), facecolor='none')
-
-
-
         ax_opt.set_facecolor('none')
-
-
-
         sc = ax_opt.scatter(res[1,:], res[0,:], c=res[2,:], cmap='viridis', s=10, alpha=0.3)
-
-
-
-        ax_opt.scatter(res[1,best_idx], res[0,best_idx], marker='*', color='r', s=200, label='Optimal')
-
-
-
+        
+        # Marqueurs des optima
+        ax_opt.scatter(res[1,best_sharpe_idx], res[0,best_sharpe_idx], marker='*', color='r', s=200, label='Max Sharpe')
+        ax_opt.scatter(res[1,best_sortino_idx], res[0,best_sortino_idx], marker='P', color='orange', s=180, label='Max Sortino')
+        ax_opt.scatter(res[1,best_calmar_idx], res[0,best_calmar_idx], marker='X', color='cyan', s=180, label='Max Calmar')
         ax_opt.scatter(curr_vol, curr_ret, marker='D', color='white', s=150, edgecolors='black', label='Actuel')
-
-
-
-        ax_opt.legend(); st.pyplot(fig_opt, transparent=True)
-
-
-
+        
+        ax_opt.set_xlabel("Volatilité (Risque)")
+        ax_opt.set_ylabel("Rendement Espéré")
+        ax_opt.legend(facecolor='#0e1117', edgecolor='white')
+        st.pyplot(fig_opt, transparent=True)
+    
     with c2:
-
-
-
+        st.write("📊 **Poids du Portefeuille Optimal (Sharpe)**")
         comp_df = pd.DataFrame({
-
-
-
             'Actuel (%)': [round(x*100, 1) for x in curr_w],
-
-
-
-            'Optimal (%)': [round(x*100, 1) for x in w_rec[best_idx]]
-
-
-
+            'Optimal (%)': [round(x*100, 1) for x in w_rec[best_sharpe_idx]]
         }, index=final_list)
-
-
-
         st.table(comp_df)
-
-
-
-        st.metric("Sharpe Optimal", f"{res[2, best_idx]:.2f}", f"{res[2, best_idx]-curr_sharpe:.2f}")
+        
+        st.write("📈 **Scores Max**")
+        st.write(f"Sortino Max: `{res[3, best_sortino_idx]:.2f}`")
+        st.write(f"Calmar Max: `{res[4, best_calmar_idx]:.2f}`")
