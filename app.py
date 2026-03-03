@@ -60,11 +60,22 @@ st.title("THE FRENCH BUILT TOOL FOR STRATEGIC INVESTING")
 def get_full_ticker_info(symbol):
     try:
         t = yf.Ticker(symbol)
-        # On essaie de prendre le nom long, sinon le court, sinon le symbole par défaut
-        name = t.info.get('longName') 
+        # 1. On tente le longName dans .info
+        name = t.info.get('longName')
+        
+        # 2. Si c'est vide, on tente le shortName
+        if not name:
+            name = t.info.get('shortName')
+            
+        # 3. Si c'est toujours vide, on utilise une autre méthode (history)
+        # pour forcer la récupération des métadonnées
+        if not name:
+            _ = t.history(period="1d") # Force le chargement
+            name = t.info.get('longName') or symbol
+            
         return name
     except:
-        return symbol
+        return symbol # Retourne au moins le ticker si tout échoue
 
 # --- SIDEBAR & RECHERCHE INTELLIGENTE ---
 with st.sidebar:
