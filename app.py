@@ -146,10 +146,6 @@ if app_mode == "Données historiques" and run_btn:
             plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
             ax.legend(facecolor='#0e1117', edgecolor='white')
             ax.grid(True, alpha=0.1, color='white'); st.pyplot(fig, transparent=True)
-            
-
-[Image of stock market comparison chart]
-
         
         with c2:
             st.markdown("### 🟢 Portefeuille")
@@ -186,7 +182,6 @@ elif app_mode == "Projection Monte Carlo" and run_btn:
     ax2 = fig.add_subplot(gs[1], facecolor='none'); _, b, ptch = ax2.hist(pnl, 50, density=True, alpha=0.8)
     for bi, pi in zip(b, ptch): pi.set_facecolor('red' if bi < 0 else 'green')
     st.pyplot(fig, transparent=True)
-    
 
 # --- MODE OPTIMISATION ---
 elif app_mode == "Optimisation & Frontière Efficiente" and run_btn:
@@ -207,5 +202,4 @@ elif app_mode == "Optimisation & Frontière Efficiente" and run_btn:
         ax.scatter(res[1,b_idx], res[0,b_idx], marker='*', color='r', s=200, label='Optimal')
         ax.scatter(c_v, c_r, marker='D', color='white', s=150, edgecolors='black', label='Actuel')
         ax.legend(); st.pyplot(fig, transparent=True)
-        
     with c2: st.table(pd.DataFrame({'Actuel %': [round(x*100, 1) for x in c_w], 'Optimal %': [round(x*100, 1) for x in w_r[b_idx]]}, index=final_list))
