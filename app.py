@@ -8,69 +8,41 @@ import datetime
 from scipy.linalg import cholesky
 # --- CONFIGURATION DE LA PAGE & MASQUAGE MENU ---
 st.set_page_config(page_title="European Portfolio Master Pro", layout="wide")
-hide_st_style = """
-            <style>
-            #MainMenu {visibility: hidden;}
-            footer {visibility: hidden;}
-            header {visibility: hidden;}
-            .stDeployButton {display:none;}
-            </style>
-            """
+hide_st_style = """<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;} .stDeployButton {display:none;}</style>"""
 st.markdown(hide_st_style, unsafe_allow_html=True)
-# --- BANDEAU ANIMÉ RALENTI (100s) ---
+# --- BANDEAU ANIMÉ ---
 def display_animated_ticker():
-    indices = {"^FCHI": "CAC 40", "^GDAXI": "DAX 40", "^STOXX50E": "EURO 50", "^GSPC": "S&P 500", "^IXIC": "NASDAQ", "^N225": "NIKKEI", "BTC-USD": "BITCOIN", "GC=F": "OR"}
+    indices = {"^FCHI": "CAC 40", "^GDAXI": "DAX 40", "^STOXX50E": "EURO 50", "^GSPC": "S&P 500", "^IXIC": "NASDAQ", "BTC-USD": "BITCOIN", "GC=F": "OR"}
     try:
-        ticker_data = yf.download(list(indices.keys()), period="5d", progress=False)['Close']
-        ticker_data = ticker_data.ffill()
+        ticker_data = yf.download(list(indices.keys()), period="5d", progress=False)['Close'].ffill()
         ticker_items = ""
         for ticker, name in indices.items():
             series = ticker_data[ticker].dropna()
             if len(series) >= 2:
-                current = series.iloc[-1]
-                prev = series.iloc[-2]
+                current, prev = series.iloc[-1], series.iloc[-2]
                 var = ((current - prev) / prev) * 100
-                color = "#00ff00" if var >= 0 else "#ff4b4b"
-                icon = "▲" if var >= 0 else "▼"
-                sign = "+" if var >= 0 else ""
-                ticker_items += f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <b>{name}</b> {current:,.2f} <span style='color:{color};'>{icon} {sign}{var:.2f}%</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |"
-        full_content = (ticker_items * 3) if ticker_items else "Chargement des marchés..."
-        st.markdown(f"""
-            <style>
-            @keyframes marquee {{ 0% {{ transform: translateX(0); }} 100% {{ transform: translateX(-50%); }} }}
-            .ticker-wrap {{ width: 100%; overflow: hidden; background-color: #0e1117; padding: 12px 0; border-bottom: 2px solid #31333f; white-space: nowrap; }}
-            .ticker-move {{ display: inline-block; white-space: nowrap; animation: marquee 100s linear infinite; font-family: 'Segoe UI', sans-serif; font-size: 1.1rem; color: white; }}
-            .ticker-move:hover {{ animation-play-state: paused; cursor: pointer; }}
-            </style>
-            <div class="ticker-wrap"><div class="ticker-move">{full_content}</div></div>
-        """, unsafe_allow_html=True)
-    except: st.error("Erreur de flux")
+                color, icon = ("#00ff00", "▲") if var >= 0 else ("#ff4b4b", "▼")
+                ticker_items += f"&nbsp;&nbsp;&nbsp;&nbsp; <b>{name}</b> {current:,.2f} <span style='color:{color};'>{icon} {var:+.2f}%</span> &nbsp;&nbsp;&nbsp;&nbsp; |"
+        st.markdown(f"""<style>@keyframes marquee {{ 0% {{ transform: translateX(0); }} 100% {{ transform: translateX(-50%); }} }} .ticker-wrap {{ width: 100%; overflow: hidden; background-color: #0e1117; padding: 12px 0; border-bottom: 2px solid #31333f; white-space: nowrap; }} .ticker-move {{ display: inline-block; white-space: nowrap; animation: marquee 100s linear infinite; font-family: sans-serif; font-size: 1.1rem; color: white; }}</style><div class="ticker-wrap"><div class="ticker-move">{(ticker_items * 3)}</div></div>""", unsafe_allow_html=True)
+    except: st.error("Erreur flux")
 display_animated_ticker()
 st.title("THE FRENCH BUILT TOOL FOR STRATEGIC INVESTING")
-# --- FONCTION RECHERCHE TICKER ---
 def get_full_ticker_info(symbol):
     try:
         search = yf.Search(symbol, max_results=1)
-        if search.quotes:
-            name = search.quotes[0].get('longname') or search.quotes[0].get('shortname')
-            if name: return name
-        t = yf.Ticker(symbol)
-        return t.info.get('longName') or symbol
+        if search.quotes: return search.quotes[0].get('longname') or search.quotes[0].get('shortname')
+        return yf.Ticker(symbol).info.get('longName') or symbol
     except: return symbol
-# --- SIDEBAR & RECHERCHE INTELLIGENTE ---
 with st.sidebar:
     st.header("🧭 Navigation")
     app_mode = st.radio("Choisir l'outil :", ["Projection Monte Carlo", "Optimisation & Frontière Efficiente", "Données historiques"])
     st.divider()
     st.header("🛒 Portefeuille")
-    if 'portfolio' not in st.session_state:
-        st.session_state.portfolio = {}
-    search_input = st.text_input("Rechercher un Ticker (ex: AAPL, MC.PA, NESN.SW) :").upper()
+    if 'portfolio' not in st.session_state: st.session_state.portfolio = {}
+    search_input = st.text_input("Rechercher un Ticker/ISIN :").upper()
     if st.button("➕ Ajouter à l'analyse"):
         if search_input:
-            with st.spinner('Récupération du nom...'):
-                full_name = get_full_ticker_info(search_input)
-                st.session_state.portfolio[search_input] = full_name
+            with st.spinner('Recherche...'): st.session_state.portfolio[search_input] = get_full_ticker_info(search_input)
             st.rerun()
     if st.session_state.portfolio:
         to_delete = []
@@ -78,41 +50,33 @@ with st.sidebar:
             c1, c2 = st.columns([4, 1])
             c1.caption(f"**{t}**\n{name}")
             if c2.button("**-**", key=f"del_{t}"): to_delete.append(t)
-        for t in to_delete:
-            del st.session_state.portfolio[t]
-            st.rerun()
+        for t in to_delete: del st.session_state.portfolio[t]; st.rerun()
     final_list = list(st.session_state.portfolio.keys())
-    if not final_list:
-        st.info("Veuillez ajouter des actifs pour commencer.")
-        st.stop()
+    if not final_list: st.info("Ajoutez des actifs."); st.stop()
     st.divider()
     shares_dict = {t: st.number_input(f"Qte {t}", value=10, min_value=1) for t in final_list}
     st.divider()
     if app_mode == "Projection Monte Carlo":
         model_type = st.radio("Modèle :", ["FHS (Historique)", "Student-t", "GARCH(1,1)"])
-        start_date = st.date_input("Historique depuis :", datetime.date(2021, 1, 1))
-        n_days = st.number_input("Horizon (jours)", value=150)
-        n_sims = st.number_input("Simulations", value=2000)
-        run_btn = st.button("🚀 LANCER LA SIMULATION")
+        start_date = st.date_input("Depuis :", datetime.date(2021, 1, 1))
+        n_days, n_sims = st.number_input("Horizon", 150), st.number_input("Sims", 2000)
+        run_btn = st.button("🚀 LANCER")
     elif app_mode == "Optimisation & Frontière Efficiente":
-        start_date = st.date_input("Analyse depuis :", datetime.date(2020, 1, 1))
-        rf_rate = st.number_input("Taux sans risque (%)", value=3.0) / 100
-        n_portfolios = st.number_input("Nombre de portefeuilles", value=5000)
-        run_btn = st.button("🎯 GÉNÉRER LA FRONTIÈRE")
+        start_date = st.date_input("Depuis :", datetime.date(2020, 1, 1))
+        rf_rate, n_portfolios = st.number_input("Taux sans risque %", 3.0)/100, st.number_input("Portefeuilles", 5000)
+        run_btn = st.button("🎯 GÉNÉRER")
     else:
-        selected_asset = st.selectbox("Sélectionner l'actif", final_list, format_func=lambda x: f"{x} - {st.session_state.portfolio[x]}")
-        period_options = {"1m": "1mo", "6m": "6mo", "1y": "1y", "3y": "3y", "5y": "5y", "10y": "10y", "all time": "max"}
-        selected_period = st.selectbox("Période", list(period_options.keys()))
-        fees_pct = st.number_input("Frais annuels du produit (%)", value=0.0, step=0.1)
-        rf_rate_hist = st.number_input("Taux sans risque (Sharpe) (%)", value=3.0, step=0.5) / 100
-        run_btn = st.button("📈 AFFICHER L'HISTORIQUE")
-# --- CHARGEMENT DES DONNÉES ---
+        selected_asset = st.selectbox("Actif", final_list, format_func=lambda x: f"{x} - {st.session_state.portfolio[x]}")
+        selected_period = st.selectbox("Période", ["1m", "6m", "1y", "3y", "5y", "10y", "all time"])
+        st.subheader("Frais de l'enveloppe")
+        f_entree = st.number_input("Droits d'entrée (%)", 0.0, step=0.1) / 100
+        f_gestion = st.number_input("Frais de gestion annuels (%)", 0.0, step=0.1) / 100
+        f_perf = st.number_input("Com. de surperformance (%)", 0.0, step=1.0) / 100
+        rf_hist = st.number_input("Taux sans risque (Sharpe) %", 3.0) / 100
+        run_btn = st.button("📈 ANALYSER")
 @st.cache_data
-def load_data_portfolio(tickers):
-    df = yf.download(tickers, start="2018-01-01", progress=False)['Close']
-    return df.ffill().dropna()
+def load_data_portfolio(tickers): return yf.download(tickers, start="2018-01-01", progress=False)['Close'].ffill().dropna()
 raw_data = load_data_portfolio(final_list)
-# --- MODE MONTE CARLO ---
 if app_mode == "Projection Monte Carlo" and run_btn:
     data_filtered = raw_data[raw_data.index >= pd.Timestamp(start_date)]
     returns = np.log(data_filtered / data_filtered.shift(1)).dropna()
@@ -120,102 +84,64 @@ if app_mode == "Projection Monte Carlo" and run_btn:
     total_val = sum(last_prices[t] * shares_dict[t] for t in final_list)
     price_paths = np.zeros((n_days, n_sims, len(final_list)))
     temp_prices = np.tile(last_prices.values, (n_sims, 1))
-    decay = 0.94
-    ewma_var = (returns**2).ewm(alpha=(1 - decay), adjust=False).mean()
+    decay, ewma_var = 0.94, (returns**2).ewm(alpha=0.06, adjust=False).mean()
     sim_vols = np.tile(np.sqrt(ewma_var.iloc[-1].values), (n_sims, 1))
     for t in range(n_days):
-        shocks = np.random.normal(0, 1, size=(n_sims, len(final_list)))
-        daily_ret = shocks * sim_vols
-        temp_prices *= np.exp(daily_ret)
-        price_paths[t] = temp_prices
-        sim_vols = np.sqrt(decay * (sim_vols**2) + (1 - decay) * (daily_ret**2))
+        daily_ret = np.random.normal(0, 1, (n_sims, len(final_list))) * sim_vols
+        temp_prices *= np.exp(daily_ret); price_paths[t] = temp_prices
+        sim_vols = np.sqrt(decay * (sim_vols**2) + (1-decay) * (daily_ret**2))
     portfolio_paths = np.sum(price_paths * [shares_dict[t] for t in final_list], axis=2)
     final_pnl = portfolio_paths[-1, :] - total_val
-    st.columns(3)[1].metric(f"Issue Médiane", f"{np.median(final_pnl):,.2f} €", f"{(np.median(final_pnl)/total_val)*100:.2f} %")
-    fig = plt.figure(figsize=(16, 7), facecolor='none')
-    gs = GridSpec(1, 2, width_ratios=[1.8, 1])
+    st.columns(3)[1].metric("Issue Médiane", f"{np.median(final_pnl):,.2f} €", f"{(np.median(final_pnl)/total_val)*100:.2f} %")
+    fig = plt.figure(figsize=(16, 7), facecolor='none'); gs = GridSpec(1, 2, width_ratios=[1.8, 1])
     plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
     ax1 = fig.add_subplot(gs[0], facecolor='none'); norm = plt.Normalize(final_pnl.min(), final_pnl.max())
     for i in np.random.choice(n_sims, 100): ax1.plot(portfolio_paths[:, i], color=plt.cm.RdYlGn(norm(final_pnl[i])), alpha=0.3)
-    ax2 = fig.add_subplot(gs[1], facecolor='none'); n, bins, patches = ax2.hist(final_pnl, bins=50, density=True, alpha=0.8)
+    ax2 = fig.add_subplot(gs[1], facecolor='none'); n, bins, patches = ax2.hist(final_pnl, 50, density=True, alpha=0.8)
     for b, p in zip(bins, patches): p.set_facecolor('red' if b < 0 else 'green')
     st.pyplot(fig, transparent=True)
-# --- MODE OPTIMISATION ---
 elif app_mode == "Optimisation & Frontière Efficiente" and run_btn:
-    data_opt = raw_data[raw_data.index >= pd.Timestamp(start_date)]
-    returns_daily = data_opt.pct_change().dropna()
-    mean_returns = returns_daily.mean() * 252
-    cov_matrix = returns_daily.cov() * 252
-    last_p = data_opt.iloc[-1]
-    vals = np.array([shares_dict[t] * last_p[t] for t in final_list])
-    curr_w = vals / np.sum(vals)
-    curr_ret = np.sum(mean_returns * curr_w)
-    curr_vol = np.sqrt(np.dot(curr_w.T, np.dot(cov_matrix, curr_w)))
-    curr_sharpe = (curr_ret - rf_rate) / curr_vol
-    res = np.zeros((3, n_portfolios))
-    w_rec = []
+    returns_daily = raw_data[raw_data.index >= pd.Timestamp(start_date)].pct_change().dropna()
+    mean_ret, cov = returns_daily.mean()*252, returns_daily.cov()*252
+    curr_w = np.array([shares_dict[t]*raw_data[t].iloc[-1] for t in final_list]); curr_w /= np.sum(curr_w)
+    curr_ret, curr_vol = np.sum(mean_ret*curr_w), np.sqrt(np.dot(curr_w.T, np.dot(cov, curr_w)))
+    res = np.zeros((3, n_portfolios)); w_rec = []
     for i in range(n_portfolios):
-        w = np.random.random(len(final_list)); w /= np.sum(w)
-        w_rec.append(w)
-        r = np.sum(mean_returns * w)
-        v = np.sqrt(np.dot(w.T, np.dot(cov_matrix, w)))
-        res[0,i], res[1,i], res[2,i] = r, v, (r - rf_rate) / v
+        w = np.random.random(len(final_list)); w /= np.sum(w); w_rec.append(w)
+        r, v = np.sum(mean_ret*w), np.sqrt(np.dot(w.T, np.dot(cov, w)))
+        res[0,i], res[1,i], res[2,i] = r, v, (r-rf_rate)/v
     best_idx = np.argmax(res[2])
-    st.subheader("🎯 Comparaison : Actuel vs Optimisé")
     c1, c2 = st.columns([2, 1])
     with c1:
-        fig_opt, ax_opt = plt.subplots(figsize=(10, 6), facecolor='none')
-        ax_opt.set_facecolor('none')
-        sc = ax_opt.scatter(res[1,:], res[0,:], c=res[2,:], cmap='viridis', s=10, alpha=0.3)
-        ax_opt.scatter(res[1,best_idx], res[0,best_idx], marker='*', color='r', s=200, label='Optimal')
-        ax_opt.scatter(curr_vol, curr_ret, marker='D', color='white', s=150, edgecolors='black', label='Actuel')
-        ax_opt.legend(); st.pyplot(fig_opt, transparent=True)
-    with c2:
-        comp_df = pd.DataFrame({
-            'Actuel (%)': [round(x*100, 1) for x in curr_w],
-            'Optimal (%)': [round(x*100, 1) for x in w_rec[best_idx]]
-        }, index=final_list)
-        st.table(comp_df)
-        st.metric("Sharpe Optimal", f"{res[2, best_idx]:.2f}", f"{res[2, best_idx]-curr_sharpe:.2f}")
-# --- MODE DONNÉES HISTORIQUES ---
+        fig, ax = plt.subplots(figsize=(10, 6), facecolor='none'); ax.set_facecolor('none')
+        ax.scatter(res[1,:], res[0,:], c=res[2,:], cmap='viridis', s=10, alpha=0.3)
+        ax.scatter(res[1,best_idx], res[0,best_idx], marker='*', color='r', s=200, label='Optimal')
+        ax.scatter(curr_vol, curr_ret, marker='D', color='white', s=150, edgecolors='black', label='Actuel')
+        ax.legend(); st.pyplot(fig, transparent=True)
+    with c2: st.table(pd.DataFrame({'Actuel %': [round(x*100, 1) for x in curr_w], 'Optimal %': [round(x*100, 1) for x in w_rec[best_idx]]}, index=final_list))
 elif app_mode == "Données historiques" and run_btn:
-    st.subheader(f"📊 Historique : {st.session_state.portfolio[selected_asset]} ({selected_asset})")
-    with st.spinner("Récupération des données..."):
-        ticker_yf_period = period_options[selected_period]
-        hist_df = yf.download(selected_asset, period=ticker_yf_period, progress=False)['Close']
-        if not hist_df.empty:
-            hist_df = hist_df.ffill().dropna()
-            hist_series = hist_df.iloc[:, 0] if isinstance(hist_df, pd.DataFrame) else hist_df
-            start_price = hist_series.iloc[0]
-            end_price = hist_series.iloc[-1]
-            days = (hist_series.index[-1] - hist_series.index[0]).days
-            years = days / 365.25 if days > 0 else 0
-            perf_brute = (end_price - start_price) / start_price
-            perf_nette = ((1 + perf_brute) * ((1 - fees_pct/100) ** years)) - 1 if years > 0 else perf_brute
-            daily_returns = hist_series.pct_change().dropna()
-            vol_annuelle = daily_returns.std() * np.sqrt(252)
-            rendement_annuel = daily_returns.mean() * 252
-            sharpe = (rendement_annuel - rf_rate_hist) / vol_annuelle if vol_annuelle > 0 else 0
-            cum_ret = (1 + daily_returns).cumprod()
-            peak = cum_ret.expanding(min_periods=1).max()
-            dd = (cum_ret / peak) - 1
-            max_dd = dd.min()
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                fig_h, ax_h = plt.subplots(figsize=(10, 5), facecolor='none')
-                ax_h.set_facecolor('none')
-                ax_h.plot(hist_series.index, hist_series.values, color='#00ff00', linewidth=2)
-                ax_h.fill_between(hist_series.index, hist_series.values, hist_series.min() * 0.95, color='#00ff00', alpha=0.1)
-                ax_h.set_ylim(bottom=hist_series.min() * 0.95)
-                plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
-                ax_h.grid(True, alpha=0.2, color='white')
-                st.pyplot(fig_h, transparent=True)
-            with col2:
-                st.metric("Prix Actuel", f"{end_price:.2f}")
-                st.metric("Performance Brute", f"{perf_brute*100:.2f} %")
-                st.metric(f"Perf. Nette (-{fees_pct}%/an)", f"{perf_nette*100:.2f} %")
-                st.metric("Volatilité Annuelle", f"{vol_annuelle*100:.2f} %")
-                st.metric("Max Drawdown", f"{max_dd*100:.2f} %")
-                st.metric("Ratio de Sharpe", f"{sharpe:.2f}")
-        else:
-            st.warning("Aucune donnée trouvée pour cette période.")
+    st.subheader(f"📊 {st.session_state.portfolio[selected_asset]} ({selected_asset})")
+    p_map = {"1m":"1mo", "6m":"6mo", "1y":"1y", "3y":"3y", "5y":"5y", "10y":"10y", "all time":"max"}
+    hist_df = yf.download(selected_asset, period=p_map[selected_period], progress=False)['Close'].ffill().dropna()
+    if not hist_df.empty:
+        hist = hist_df.iloc[:, 0] if isinstance(hist_df, pd.DataFrame) else hist_df
+        years = (hist.index[-1] - hist.index[0]).days / 365.25
+        perf_brute = (hist.iloc[-1] / hist.iloc[0]) - 1
+        capital_init_net = 1 * (1 - f_entree)
+        val_apres_gestion = capital_init_net * (hist.iloc[-1] / hist.iloc[0]) * ((1 - f_gestion) ** years)
+        gain_potentiel = val_apres_gestion - 1
+        val_finale = val_apres_gestion - (gain_potentiel * f_perf) if gain_potentiel > 0 else val_apres_gestion
+        perf_nette_totale = val_finale - 1
+        daily_ret = hist.pct_change().dropna()
+        vol, sharpe = daily_ret.std()*np.sqrt(252), ((daily_ret.mean()*252) - rf_hist)/(daily_ret.std()*np.sqrt(252))
+        max_dd = ((hist / hist.expanding().max()) - 1).min()
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            fig, ax = plt.subplots(figsize=(10, 5), facecolor='none'); ax.set_facecolor('none')
+            ax.plot(hist.index, hist.values, color='#00ff00', lw=2)
+            ax.fill_between(hist.index, hist.values, hist.min()*0.95, color='#00ff00', alpha=0.1)
+            ax.grid(True, alpha=0.1, color='white'); st.pyplot(fig, transparent=True)
+        with c2:
+            st.metric("Performance Brute", f"{perf_brute*100:.2f} %")
+            st.metric("Performance Nette", f"{perf_nette_totale*100:.2f} %", f"Frais: {((perf_brute-perf_nette_totale)*100):.2f}%", delta_color="inverse")
+            st.metric("Volatilité", f"{vol*100:.2f} %"); st.metric("Max Drawdown", f"{max_dd*100:.2f} %"); st.metric("Sharpe", f"{sharpe:.2f}")
