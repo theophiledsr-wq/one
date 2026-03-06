@@ -6,13 +6,13 @@ import pandas as pd
 from matplotlib.gridspec import GridSpec
 import datetime
 from scipy.linalg import cholesky
-# --- CONFIGURATION DE LA PAGE & MASQUAGE MENU ---
+# --- CONFIGURATION ---
 st.set_page_config(page_title="European Portfolio Master Pro", layout="wide")
 hide_st_style = """<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;} .stDeployButton {display:none;}</style>"""
 st.markdown(hide_st_style, unsafe_allow_html=True)
-# --- BANDEAU ANIMÉ ---
+# --- BANDEAU MARCHÉ ---
 def display_animated_ticker():
-    indices = {"^FCHI": "CAC 40", "^GDAXI": "DAX 40", "^STOXX50E": "EURO 50", "^GSPC": "S&P 500", "^IXIC": "NASDAQ", "BTC-USD": "BITCOIN", "GC=F": "OR"}
+    indices = {"^FCHI": "CAC 40", "^GDAXI": "DAX 40", "^STOXX50E": "EURO 50", "^GSPC": "S&P 500", "BTC-USD": "BITCOIN", "GC=F": "OR"}
     try:
         ticker_data = yf.download(list(indices.keys()), period="5d", progress=False)['Close'].ffill()
         ticker_items = ""
@@ -33,16 +33,21 @@ def get_full_ticker_info(symbol):
         if search.quotes: return search.quotes[0].get('longname') or search.quotes[0].get('shortname')
         return yf.Ticker(symbol).info.get('longName') or symbol
     except: return symbol
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("🧭 Navigation")
     app_mode = st.radio("Choisir l'outil :", ["Projection Monte Carlo", "Optimisation & Frontière Efficiente", "Données historiques"])
     st.divider()
     st.header("🛒 Portefeuille")
     if 'portfolio' not in st.session_state: st.session_state.portfolio = {}
+    if 'asset_fees' not in st.session_state: st.session_state.asset_fees = {}
     search_input = st.text_input("Rechercher un Ticker/ISIN :").upper()
     if st.button("➕ Ajouter à l'analyse"):
         if search_input:
-            with st.spinner('Recherche...'): st.session_state.portfolio[search_input] = get_full_ticker_info(search_input)
+            with st.spinner('Recherche...'): 
+                name = get_full_ticker_info(search_input)
+                st.session_state.portfolio[search_input] = name
+                st.session_state.asset_fees[search_input] = {'entry': 0.0, 'mgmt': 0.0, 'perf': 0.0}
             st.rerun()
     if st.session_state.portfolio:
         to_delete = []
@@ -50,33 +55,38 @@ with st.sidebar:
             c1, c2 = st.columns([4, 1])
             c1.caption(f"**{t}**\n{name}")
             if c2.button("**-**", key=f"del_{t}"): to_delete.append(t)
-        for t in to_delete: del st.session_state.portfolio[t]; st.rerun()
+        for t in to_delete: 
+            del st.session_state.portfolio[t]
+            if t in st.session_state.asset_fees: del st.session_state.asset_fees[t]
+            st.rerun()
     final_list = list(st.session_state.portfolio.keys())
     if not final_list: st.info("Ajoutez des actifs."); st.stop()
     st.divider()
-    shares_dict = {t: st.number_input(f"Qte {t}", value=10, min_value=1) for t in final_list}
-    st.divider()
-    if app_mode == "Projection Monte Carlo":
-        model_type = st.radio("Modèle :", ["FHS (Historique)", "Student-t", "GARCH(1,1)"])
-        start_date = st.date_input("Depuis :", datetime.date(2021, 1, 1))
-        n_days, n_sims = st.number_input("Horizon", 150), st.number_input("Sims", 2000)
-        run_btn = st.button("🚀 LANCER")
-    elif app_mode == "Optimisation & Frontière Efficiente":
-        start_date = st.date_input("Depuis :", datetime.date(2020, 1, 1))
-        rf_rate, n_portfolios = st.number_input("Taux sans risque %", 3.0)/100, st.number_input("Portefeuilles", 5000)
-        run_btn = st.button("🎯 GÉNÉRER")
-    else:
-        selected_asset = st.selectbox("Actif", final_list, format_func=lambda x: f"{x} - {st.session_state.portfolio[x]}")
+    if app_mode == "Données historiques":
+        st.subheader("⚙️ Configuration des frais")
+        selected_asset = st.selectbox("Actif à analyser", final_list)
         selected_period = st.selectbox("Période", ["1m", "6m", "1y", "3y", "5y", "10y", "all time"])
-        st.subheader("Frais de l'enveloppe")
-        f_entree = st.number_input("Droits d'entrée (%)", 0.0, step=0.1) / 100
-        f_gestion = st.number_input("Frais de gestion annuels (%)", 0.0, step=0.1) / 100
-        f_perf = st.number_input("Com. de surperformance (%)", 0.0, step=1.0) / 100
+        for t in final_list:
+            with st.expander(f"Frais : {t}", expanded=(t == selected_asset)):
+                st.session_state.asset_fees[t]['entry'] = st.number_input(f"Entrée % ({t})", 0.0, step=0.1, key=f"ent_{t}") / 100
+                st.session_state.asset_fees[t]['mgmt'] = st.number_input(f"Gestion Annuelle % ({t})", 0.0, step=0.1, key=f"mgt_{t}") / 100
+                st.session_state.asset_fees[t]['perf'] = st.number_input(f"Surperformance % ({t})", 0.0, step=1.0, key=f"prf_{t}") / 100
         rf_hist = st.number_input("Taux sans risque (Sharpe) %", 3.0) / 100
-        run_btn = st.button("📈 ANALYSER")
+        run_btn = st.button("📈 ANALYSER L'ACTIF")
+    else:
+        shares_dict = {t: st.number_input(f"Qte {t}", value=10, min_value=1) for t in final_list}
+        if app_mode == "Projection Monte Carlo":
+            start_date = st.date_input("Depuis :", datetime.date(2021, 1, 1))
+            n_days, n_sims = st.number_input("Horizon", 150), st.number_input("Sims", 2000)
+            run_btn = st.button("🚀 LANCER SIMULATION")
+        else:
+            start_date = st.date_input("Depuis :", datetime.date(2020, 1, 1))
+            rf_rate, n_portfolios = st.number_input("Taux sans risque %", 3.0)/100, st.number_input("Portefeuilles", 5000)
+            run_btn = st.button("🎯 GÉNÉRER FRONTIÈRE")
 @st.cache_data
 def load_data_portfolio(tickers): return yf.download(tickers, start="2018-01-01", progress=False)['Close'].ffill().dropna()
 raw_data = load_data_portfolio(final_list)
+# --- LOGIQUE ONGLETS ---
 if app_mode == "Projection Monte Carlo" and run_btn:
     data_filtered = raw_data[raw_data.index >= pd.Timestamp(start_date)]
     returns = np.log(data_filtered / data_filtered.shift(1)).dropna()
@@ -120,18 +130,19 @@ elif app_mode == "Optimisation & Frontière Efficiente" and run_btn:
         ax.legend(); st.pyplot(fig, transparent=True)
     with c2: st.table(pd.DataFrame({'Actuel %': [round(x*100, 1) for x in curr_w], 'Optimal %': [round(x*100, 1) for x in w_rec[best_idx]]}, index=final_list))
 elif app_mode == "Données historiques" and run_btn:
-    st.subheader(f"📊 {st.session_state.portfolio[selected_asset]} ({selected_asset})")
+    st.subheader(f"📊 Analyse : {st.session_state.portfolio[selected_asset]} ({selected_asset})")
     p_map = {"1m":"1mo", "6m":"6mo", "1y":"1y", "3y":"3y", "5y":"5y", "10y":"10y", "all time":"max"}
     hist_df = yf.download(selected_asset, period=p_map[selected_period], progress=False)['Close'].ffill().dropna()
     if not hist_df.empty:
         hist = hist_df.iloc[:, 0] if isinstance(hist_df, pd.DataFrame) else hist_df
+        fees = st.session_state.asset_fees[selected_asset]
         years = (hist.index[-1] - hist.index[0]).days / 365.25
         perf_brute = (hist.iloc[-1] / hist.iloc[0]) - 1
-        capital_init_net = 1 * (1 - f_entree)
-        val_apres_gestion = capital_init_net * (hist.iloc[-1] / hist.iloc[0]) * ((1 - f_gestion) ** years)
-        gain_potentiel = val_apres_gestion - 1
-        val_finale = val_apres_gestion - (gain_potentiel * f_perf) if gain_potentiel > 0 else val_apres_gestion
-        perf_nette_totale = val_finale - 1
+        cap_init_net = 1 * (1 - fees['entry'])
+        val_apres_gestion = cap_init_net * (hist.iloc[-1] / hist.iloc[0]) * ((1 - fees['mgmt']) ** years)
+        gain = val_apres_gestion - 1
+        val_finale = val_apres_gestion - (gain * fees['perf']) if gain > 0 else val_apres_gestion
+        perf_nette = val_finale - 1
         daily_ret = hist.pct_change().dropna()
         vol, sharpe = daily_ret.std()*np.sqrt(252), ((daily_ret.mean()*252) - rf_hist)/(daily_ret.std()*np.sqrt(252))
         max_dd = ((hist / hist.expanding().max()) - 1).min()
@@ -142,6 +153,6 @@ elif app_mode == "Données historiques" and run_btn:
             ax.fill_between(hist.index, hist.values, hist.min()*0.95, color='#00ff00', alpha=0.1)
             ax.grid(True, alpha=0.1, color='white'); st.pyplot(fig, transparent=True)
         with c2:
-            st.metric("Performance Brute", f"{perf_brute*100:.2f} %")
-            st.metric("Performance Nette", f"{perf_nette_totale*100:.2f} %", f"Frais: {((perf_brute-perf_nette_totale)*100):.2f}%", delta_color="inverse")
-            st.metric("Volatilité", f"{vol*100:.2f} %"); st.metric("Max Drawdown", f"{max_dd*100:.2f} %"); st.metric("Sharpe", f"{sharpe:.2f}")
+            st.metric("Perf. Brute", f"{perf_brute*100:.2f} %")
+            st.metric("Perf. Nette", f"{perf_nette*100:.2f} %", f"Total Frais: {((perf_brute-perf_nette)*100):.2f}%", delta_color="inverse")
+            st.metric("Volatilité Ann.", f"{vol*100:.2f} %"); st.metric("Max Drawdown", f"{max_dd*100:.2f} %"); st.metric("Sharpe", f"{sharpe:.2f}")
