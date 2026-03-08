@@ -15,7 +15,6 @@ st.markdown(hide_st_style, unsafe_allow_html=True)
 def display_animated_ticker():
     indices = {"^FCHI": "CAC 40", "^GDAXI": "DAX 40", "^STOXX50E": "EURO 50", "^GSPC": "S&P 500", "BTC-USD": "BITCOIN", "GC=F": "OR"}
     try:
-        # On télécharge les données pour le bandeau
         ticker_data = yf.download(list(indices.keys()), period="5d", progress=False)['Close'].ffill()
         ticker_items = ""
         for ticker, name in indices.items():
@@ -102,12 +101,10 @@ with st.sidebar:
 
 @st.cache_data
 def load_data_full(tickers): 
-    # Télécharge les actifs ET le S&P 500
     all_tickers = list(set(tickers + ["^GSPC"]))
     data = yf.download(all_tickers, start="2015-01-01", progress=False)['Close']
     return data.ffill().dropna()
 
-# Chargement global
 raw_data_all = load_data_full(final_list)
 
 # --- ANALYSE HISTORIQUE ---
@@ -116,15 +113,8 @@ if app_mode == "Données historiques" and run_btn:
     hist_subset = yf.download(list(set(final_list + ["^GSPC"])), period=p_map[selected_period], progress=False)['Close'].ffill().dropna()
     
     if not hist_subset.empty:
-        # Calcul Portefeuille
         port_val = sum(hist_subset[t] * shares_dict[t] for t in final_list)
-        init_invest = sum(hist_subset[t].iloc[0] * shares_dict[t] for t in final_list)
-        
-        # Rendements et métriques
         perf_brute = (port_val.iloc[-1] / port_val.iloc[0]) - 1
-        vol = port_val.pct_change().dropna().std() * np.sqrt(252)
-        
-        # Benchmark S&P 500
         sp500 = hist_subset["^GSPC"]
         perf_sp = (sp500.iloc[-1] / sp500.iloc[0]) - 1
 
@@ -141,11 +131,9 @@ if app_mode == "Données historiques" and run_btn:
         with c2:
             st.metric("Performance Portefeuille", f"{perf_brute*100:.2f} %")
             st.metric("Performance S&P 500", f"{perf_sp*100:.2f} %")
-            st.metric("Volatilité Ann.", f"{vol*100:.2f} %")
 
 # --- PROJECTION MONTE CARLO ---
 elif app_mode == "Projection Monte Carlo" and run_btn:
-    # Filtrage des données selon la date choisie
     data_port = raw_data_all[final_list][raw_data_all.index >= pd.Timestamp(start_date)]
     data_sp = raw_data_all["^GSPC"][raw_data_all.index >= pd.Timestamp(start_date)]
     
@@ -153,7 +141,6 @@ elif app_mode == "Projection Monte Carlo" and run_btn:
     last_prices = data_port.iloc[-1]
     total_val_init = sum(last_prices[t] * shares_dict[t] for t in final_list)
     
-    # Simulation Portefeuille
     price_paths = np.zeros((n_days, n_sims, len(final_list)))
     temp_prices = np.tile(last_prices.values, (n_sims, 1))
     vols = returns.std().values
@@ -167,11 +154,12 @@ elif app_mode == "Projection Monte Carlo" and run_btn:
     final_vals = portfolio_paths[-1, :]
     
     # Trajectoires clés
-    p5 = portfolio_paths[:, np.argsort(final_vals)[int(n_sims * 0.05)]]
-    p50 = portfolio_paths[:, np.argsort(final_vals)[int(n_sims * 0.50)]]
-    p95 = portfolio_paths[:, np.argsort(final_vals)[int(n_sims * 0.95)]]
+    idx_sorted = np.argsort(final_vals)
+    p5 = portfolio_paths[:, idx_sorted[int(n_sims * 0.05)]]
+    p50 = portfolio_paths[:, idx_sorted[int(n_sims * 0.50)]]
+    p95 = portfolio_paths[:, idx_sorted[int(n_sims * 0.95)]]
 
-    # Simulation S&P 500 (pour comparaison au même montant)
+    # Simulation S&P 500
     sp_ret = np.log(data_sp / data_sp.shift(1)).dropna()
     sp_last = data_sp.iloc[-1]
     sp_vol = sp_ret.std()
@@ -182,7 +170,13 @@ elif app_mode == "Projection Monte Carlo" and run_btn:
         sp_paths[t] = sp_temp
     
     sp_scaled = (sp_paths / sp_last) * total_val_init
-    sp_median = sp_scaled[:, np.argsort(sp_scaled[-1, :])[int(n_sims * 0.50)]]
+    sp_median_val = sp_scaled[-1, np.argsort(sp_scaled[-1, :])[int(n_sims * 0.50)]]
+    sp_median_path = sp_scaled[:, np.argsort(sp_scaled[-1, :])[int(n_sims * 0.50)]]
+
+    # CALCULS DES DELTAS ET GAINS
+    median_final_val = p50[-1]
+    potential_gain = median_final_val - total_val_init
+    delta_gspc = median_final_val - sp_median_val
 
     st.subheader(f"🚀 Simulation Monte Carlo (N={n_sims})")
     c1, c2 = st.columns([2, 1])
@@ -191,47 +185,64 @@ elif app_mode == "Projection Monte Carlo" and run_btn:
         ax.plot(p95, color='#00ff00', lw=1.5, label='Optimiste (95%)')
         ax.plot(p50, color='white', lw=2.5, label='Médian (Portefeuille)')
         ax.plot(p5, color='#ff4b4b', lw=1.5, label='Pessimiste (5%)')
-        ax.plot(sp_median, color='#A020F0', lw=2, ls='--', label='Médian S&P 500')
+        ax.plot(sp_median_path, color='#A020F0', lw=2, ls='--', label='Médian S&P 500')
         ax.fill_between(range(n_days), p5, p95, color='gray', alpha=0.1)
         plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
         ax.legend(facecolor='#0e1117', edgecolor='white')
         st.pyplot(fig, transparent=True)
+        
     with c2:
         st.markdown("### 📊 Résultats à l'échéance")
+        
+        # Coloration du Delta GSPC
+        delta_color = "green" if delta_gspc >= 0 else "red"
+        
         kpi = pd.DataFrame({
-            "Indicateur": ["Valeur Initiale", "Médiane Finale", "Probabilité Profit", "VaR (95%)"],
-            "Valeur": [f"{total_val_init:,.0f} €", f"{final_vals.mean():,.0f} €", f"{(final_vals > total_val_init).mean()*100:.1f} %", f"{total_val_init - np.percentile(final_vals, 5):,.0f} €"]
+            "Indicateur": [
+                "Valeur Initiale", 
+                "Valeur Médiane Finale", 
+                "Gain Potentiel (Médian)", 
+                "Delta vs S&P 500",
+                "Probabilité de Profit", 
+                "VaR (Risque 95%)"
+            ],
+            "Valeur": [
+                f"{total_val_init:,.0f} €", 
+                f"{median_final_val:,.0f} €", 
+                f"{potential_gain:+,.0f} €", 
+                f"{delta_gspc:+,.0f} €",
+                f"{(final_vals > total_val_init).mean()*100:.1f} %", 
+                f"{total_val_init - np.percentile(final_vals, 5):,.0f} €"
+            ]
         })
         st.table(kpi.set_index("Indicateur"))
+        
+        if delta_gspc > 0:
+            st.success(f"Outperformance : Ton portefeuille bat le S&P 500 de {delta_gspc:,.0f} € en médiane.")
+        else:
+            st.warning(f"Underperformance : Le S&P 500 fait {abs(delta_gspc):,.0f} € de mieux en médiane.")
 
 # --- OPTIMISATION ---
 elif app_mode == "Optimisation & Frontière Efficiente" and run_btn:
     rets = raw_data_all[final_list][raw_data_all.index >= pd.Timestamp(start_date)].pct_change().dropna()
     mean_ret, cov = rets.mean() * 252, rets.cov() * 252
-    
-    # Portefeuille actuel
     curr_w = np.array([shares_dict[t] * raw_data_all[t].iloc[-1] for t in final_list]); curr_w /= np.sum(curr_w)
     curr_r, curr_v = np.sum(mean_ret * curr_w), np.sqrt(np.dot(curr_w.T, np.dot(cov, curr_w)))
-    
-    # Génération aléatoire
     res = np.zeros((3, n_portfolios)); w_store = []
     for i in range(n_portfolios):
         w = np.random.random(len(final_list)); w /= np.sum(w); w_store.append(w)
         r, v = np.sum(mean_ret * w), np.sqrt(np.dot(w.T, np.dot(cov, w)))
         res[0,i], res[1,i], res[2,i] = r, v, (r - rf_rate) / v
-        
     best_idx = np.argmax(res[2])
-    
     st.subheader("🎯 Optimisation Stratégique")
     c1, c2 = st.columns([2, 1])
     with c1:
         fig, ax = plt.subplots(figsize=(10, 6), facecolor='none'); ax.set_facecolor('none')
         ax.scatter(res[1,:], res[0,:], c=res[2,:], cmap='viridis', s=10, alpha=0.3)
-        ax.scatter(res[1,best_idx], res[0,best_idx], marker='*', color='r', s=200, label='Portefeuille Optimal')
+        ax.scatter(res[1,best_idx], res[0,best_idx], marker='*', color='r', s=200, label='Optimal')
         ax.scatter(curr_v, curr_r, marker='D', color='white', s=150, edgecolors='black', label='Actuel')
         plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
         ax.legend(); st.pyplot(fig, transparent=True)
     with c2:
-        st.markdown("### ⚖️ Réallocation Suggérée")
         alloc = pd.DataFrame({'Actuel %': [round(x*100, 1) for x in curr_w], 'Optimal %': [round(x*100, 1) for x in w_store[best_idx]]}, index=final_list)
         st.table(alloc)
