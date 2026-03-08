@@ -3,7 +3,6 @@ import yfinance as yf
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from matplotlib.gridspec import GridSpec
 import datetime
 
 # --- CONFIGURATION ---
@@ -40,209 +39,151 @@ def get_full_ticker_info(symbol):
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("🧭 Navigation")
-    app_mode = st.radio("Choisir l'outil :", ["Projection Monte Carlo", "Optimisation & Frontière Efficiente", "Données historiques"])
+    app_mode = st.radio("Choisir l'outil :", ["Analyse Stratégique Complète", "Données historiques"])
     st.divider()
     
     st.header("🛒 Portefeuille")
     if 'portfolio' not in st.session_state: st.session_state.portfolio = {}
-    if 'asset_fees' not in st.session_state: st.session_state.asset_fees = {}
     
-    search_input = st.text_input("Rechercher un Ticker/ISIN :").upper()
-    if st.button("➕ Ajouter à l'analyse"):
+    search_input = st.text_input("Ajouter Ticker (ex: MC.PA, ASML, BTC-USD) :").upper()
+    if st.button("➕ Ajouter"):
         if search_input:
-            with st.spinner('Recherche...'): 
-                name = get_full_ticker_info(search_input)
-                st.session_state.portfolio[search_input] = name
-                st.session_state.asset_fees[search_input] = {'entry': 0.0, 'mgmt': 0.0, 'perf': 0.0}
+            st.session_state.portfolio[search_input] = get_full_ticker_info(search_input)
             st.rerun()
 
     if st.session_state.portfolio:
         to_delete = []
         for t, name in st.session_state.portfolio.items():
             c1, c2 = st.columns([4, 1])
-            c1.caption(f"**{t}**\n{name}")
-            if c2.button("**-**", key=f"del_{t}"): to_delete.append(t)
-        for t in to_delete: 
-            del st.session_state.portfolio[t]
-            if t in st.session_state.asset_fees: del st.session_state.asset_fees[t]
-            st.rerun()
+            c1.caption(f"**{t}** : {name}")
+            if c2.button("x", key=f"del_{t}"): to_delete.append(t)
+        for t in to_delete: del st.session_state.portfolio[t]; st.rerun()
 
     final_list = list(st.session_state.portfolio.keys())
-    if not final_list: st.info("Ajoutez des actifs."); st.stop()
+    if not final_list: st.info("Ajoutez des actifs pour commencer."); st.stop()
     
     st.divider()
-    shares_dict = {t: st.number_input(f"Qte {t}", value=10, min_value=1, key=f"qty_{t}") for t in final_list}
+    shares_dict = {t: st.number_input(f"Quantité {t}", value=10, min_value=1) for t in final_list}
     
-    if app_mode == "Données historiques":
-        st.subheader("⚙️ Configuration")
-        selected_period = st.selectbox("Période d'analyse", ["1m", "6m", "1y", "3y", "5y", "10y", "all time"])
-        for t in final_list:
-            with st.expander(f"Frais : {t}"):
-                st.session_state.asset_fees[t]['entry'] = st.number_input(f"Entrée %", value=0.0, step=0.1, key=f"ent_{t}") / 100
-                st.session_state.asset_fees[t]['mgmt'] = st.number_input(f"Gestion Annuelle %", value=0.0, step=0.1, key=f"mgt_{t}") / 100
-                st.session_state.asset_fees[t]['perf'] = st.number_input(f"Surperformance %", value=0.0, step=1.0, key=f"prf_{t}") / 100
-        rf_hist = st.number_input("Taux sans risque %", value=3.0) / 100
-        run_btn = st.button("📈 ANALYSER")
-        
-    elif app_mode == "Projection Monte Carlo":
-        st.subheader("⚙️ Paramètres")
-        start_date = st.date_input("Depuis (Volatilité historique) :", datetime.date(2021, 1, 1))
-        n_days = st.number_input("Horizon de projection (jours)", value=150, min_value=1)
-        st.caption("⚡ Simulations fixées à 5 000.")
-        n_sims = 5000
-        run_btn = st.button("🚀 LANCER SIMULATION")
-        
-    else:
-        st.subheader("⚙️ Paramètres")
-        start_date = st.date_input("Depuis :", datetime.date(2020, 1, 1))
-        rf_rate = st.number_input("Taux sans risque %", value=3.0) / 100
-        n_portfolios = st.number_input("Nombre de portefeuilles", value=5000)
-        run_btn = st.button("🎯 GÉNÉRER FRONTIÈRE")
+    st.subheader("⚙️ Paramètres de l'Analyse")
+    start_date = st.date_input("Historique de référence :", datetime.date(2021, 1, 1))
+    horizon = st.number_input("Horizon de projection (jours)", value=252)
+    rf_rate = st.number_input("Taux sans risque %", value=3.0) / 100
+    run_btn = st.button("🚀 LANCER L'ANALYSE GLOBALE")
 
+# --- CHARGEMENT DES DONNÉES ---
 @st.cache_data
-def load_data_full(tickers): 
-    all_tickers = list(set(tickers + ["^GSPC"]))
-    data = yf.download(all_tickers, start="2015-01-01", progress=False)['Close']
-    return data.ffill().dropna()
+def load_data_all(tickers):
+    all_t = list(set(tickers + ["^GSPC"]))
+    return yf.download(all_t, start="2015-01-01", progress=False)['Close'].ffill().dropna()
 
-raw_data_all = load_data_full(final_list)
+raw_data = load_data_all(final_list)
 
-# --- ANALYSE HISTORIQUE ---
-if app_mode == "Données historiques" and run_btn:
-    p_map = {"1m":"1mo", "6m":"6mo", "1y":"1y", "3y":"3y", "5y":"5y", "10y":"10y", "all time":"max"}
-    hist_subset = yf.download(list(set(final_list + ["^GSPC"])), period=p_map[selected_period], progress=False)['Close'].ffill().dropna()
+if run_btn:
+    # --- PRÉPARATION DES DONNÉES ---
+    df = raw_data[raw_data.index >= pd.Timestamp(start_date)]
+    df_port = df[final_list]
+    df_sp = df["^GSPC"]
     
-    if not hist_subset.empty:
-        port_val = sum(hist_subset[t] * shares_dict[t] for t in final_list)
-        perf_brute = (port_val.iloc[-1] / port_val.iloc[0]) - 1
-        sp500 = hist_subset["^GSPC"]
-        perf_sp = (sp500.iloc[-1] / sp500.iloc[0]) - 1
-
-        st.subheader("📊 Comparaison Historique")
-        c1, c2 = st.columns([3, 1])
-        with c1:
-            fig, ax = plt.subplots(figsize=(10, 5), facecolor='none'); ax.set_facecolor('none')
-            ax.plot((port_val / port_val.iloc[0]) * 100, color='#00ff00', lw=2, label="Portefeuille")
-            ax.plot((sp500 / sp500.iloc[0]) * 100, color='#A020F0', lw=1.5, ls='--', label="S&P 500")
-            plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
-            ax.legend(facecolor='#0e1117', edgecolor='white')
-            ax.grid(True, alpha=0.1, color='white')
-            st.pyplot(fig, transparent=True)
-        with c2:
-            st.metric("Performance Portefeuille", f"{perf_brute*100:.2f} %")
-            st.metric("Performance S&P 500", f"{perf_sp*100:.2f} %")
-
-# --- PROJECTION MONTE CARLO ---
-elif app_mode == "Projection Monte Carlo" and run_btn:
-    data_port = raw_data_all[final_list][raw_data_all.index >= pd.Timestamp(start_date)]
-    data_sp = raw_data_all["^GSPC"][raw_data_all.index >= pd.Timestamp(start_date)]
+    rets_daily = df_port.pct_change().dropna()
+    sp_rets_daily = df_sp.pct_change().dropna()
     
-    returns = np.log(data_port / data_port.shift(1)).dropna()
-    last_prices = data_port.iloc[-1]
+    # --- CALCUL ALPHA / BETA ---
+    # Beta
+    cov_matrix = np.cov(rets_daily.mean(axis=1), sp_rets_daily)[0, 1]
+    market_var = np.var(sp_rets_daily)
+    beta = cov_matrix / market_var
+    
+    # Alpha (Jensen)
+    port_ann_ret = rets_daily.mean(axis=1).mean() * 252
+    mkt_ann_ret = sp_rets_daily.mean() * 252
+    alpha = port_ann_ret - (rf_rate + beta * (mkt_ann_ret - rf_rate))
+
+    # --- SECTION 1 : MONTE CARLO ---
+    st.header("1️⃣ Projection Monte Carlo")
+    
+    n_sims = 5000
+    last_prices = df_port.iloc[-1]
     total_val_init = sum(last_prices[t] * shares_dict[t] for t in final_list)
     
-    price_paths = np.zeros((n_days, n_sims, len(final_list)))
-    temp_prices = np.tile(last_prices.values, (n_sims, 1))
-    vols = returns.std().values
+    # Simulation
+    log_rets = np.log(df_port / df_port.shift(1)).dropna()
+    vols = log_rets.std().values
     
-    for t in range(n_days):
-        daily_ret = np.random.normal(0, 1, (n_sims, len(final_list))) * vols
-        temp_prices *= np.exp(daily_ret)
+    price_paths = np.zeros((horizon, n_sims, len(final_list)))
+    temp_prices = np.tile(last_prices.values, (n_sims, 1))
+    
+    for t in range(horizon):
+        temp_prices *= np.exp(np.random.normal(0, 1, (n_sims, len(final_list))) * vols)
         price_paths[t] = temp_prices
         
     portfolio_paths = np.sum(price_paths * [shares_dict[t] for t in final_list], axis=2)
     final_vals = portfolio_paths[-1, :]
     
-    # Trajectoires clés
-    idx_sorted = np.argsort(final_vals)
-    p5 = portfolio_paths[:, idx_sorted[int(n_sims * 0.05)]]
-    p50 = portfolio_paths[:, idx_sorted[int(n_sims * 0.50)]]
-    p95 = portfolio_paths[:, idx_sorted[int(n_sims * 0.95)]]
-
-    # Simulation S&P 500
-    sp_ret = np.log(data_sp / data_sp.shift(1)).dropna()
-    sp_last = data_sp.iloc[-1]
-    sp_vol = sp_ret.std()
-    sp_paths = np.zeros((n_days, n_sims))
-    sp_temp = np.tile(sp_last, n_sims)
-    for t in range(n_days):
-        sp_temp *= np.exp(np.random.normal(0, 1, n_sims) * sp_vol)
-        sp_paths[t] = sp_temp
+    # Stats Monte Carlo
+    p50 = portfolio_paths[:, np.argsort(final_vals)[int(n_sims*0.5)]]
+    p5 = portfolio_paths[:, np.argsort(final_vals)[int(n_sims*0.05)]]
+    p95 = portfolio_paths[:, np.argsort(final_vals)[int(n_sims*0.95)]]
     
-    sp_scaled = (sp_paths / sp_last) * total_val_init
-    sp_median_val = sp_scaled[-1, np.argsort(sp_scaled[-1, :])[int(n_sims * 0.50)]]
-    sp_median_path = sp_scaled[:, np.argsort(sp_scaled[-1, :])[int(n_sims * 0.50)]]
-
-    # CALCULS DES DELTAS ET GAINS
-    median_final_val = p50[-1]
-    potential_gain = median_final_val - total_val_init
-    delta_gspc = median_final_val - sp_median_val
-
-    st.subheader(f"🚀 Simulation Monte Carlo (N={n_sims})")
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        fig, ax = plt.subplots(figsize=(10, 6), facecolor='none'); ax.set_facecolor('none')
-        ax.plot(p95, color='#00ff00', lw=1.5, label='Optimiste (95%)')
-        ax.plot(p50, color='white', lw=2.5, label='Médian (Portefeuille)')
-        ax.plot(p5, color='#ff4b4b', lw=1.5, label='Pessimiste (5%)')
-        ax.plot(sp_median_path, color='#A020F0', lw=2, ls='--', label='Médian S&P 500')
-        ax.fill_between(range(n_days), p5, p95, color='gray', alpha=0.1)
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        fig1, ax1 = plt.subplots(figsize=(10, 5), facecolor='none'); ax1.set_facecolor('none')
+        ax1.plot(p95, color='#00ff00', label='Optimiste (95%)', alpha=0.6)
+        ax1.plot(p50, color='white', lw=3, label='Médian')
+        ax1.plot(p5, color='#ff4b4b', label='Pessimiste (5%)', alpha=0.6)
+        ax1.fill_between(range(horizon), p5, p95, color='gray', alpha=0.1)
         plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
-        ax.legend(facecolor='#0e1117', edgecolor='white')
-        st.pyplot(fig, transparent=True)
-        
-    with c2:
-        st.markdown("### 📊 Résultats à l'échéance")
-        
-        # Coloration du Delta GSPC
-        delta_color = "green" if delta_gspc >= 0 else "red"
-        
-        kpi = pd.DataFrame({
-            "Indicateur": [
-                "Valeur Initiale", 
-                "Valeur Médiane Finale", 
-                "Gain Potentiel (Médian)", 
-                "Delta vs S&P 500",
-                "Probabilité de Profit", 
-                "VaR (Risque 95%)"
-            ],
-            "Valeur": [
-                f"{total_val_init:,.0f} €", 
-                f"{median_final_val:,.0f} €", 
-                f"{potential_gain:+,.0f} €", 
-                f"{delta_gspc:+,.0f} €",
-                f"{(final_vals > total_val_init).mean()*100:.1f} %", 
-                f"{total_val_init - np.percentile(final_vals, 5):,.0f} €"
-            ]
-        })
-        st.table(kpi.set_index("Indicateur"))
-        
-        if delta_gspc > 0:
-            st.success(f"Outperformance : Ton portefeuille bat le S&P 500 de {delta_gspc:,.0f} € en médiane.")
-        else:
-            st.warning(f"Underperformance : Le S&P 500 fait {abs(delta_gspc):,.0f} € de mieux en médiane.")
+        ax1.legend(); st.pyplot(fig1, transparent=True)
+    
+    with col2:
+        st.metric("Valeur Médiane Attendue", f"{p50[-1]:,.0f} €")
+        st.metric("Gain Potentiel Médian", f"{p50[-1] - total_val_init:+,.0f} €")
+        st.metric("Alpha (Performance Pure)", f"{alpha*100:+.2f} %", help="L'Alpha mesure votre talent : la performance au-dessus du marché ajustée du risque.")
+        st.metric("Beta (Exposition Marché)", f"{beta:.2f}", help="Le Beta mesure votre sensibilité au S&P 500. > 1 = Agressif, < 1 = Défensif.")
 
-# --- OPTIMISATION ---
-elif app_mode == "Optimisation & Frontière Efficiente" and run_btn:
-    rets = raw_data_all[final_list][raw_data_all.index >= pd.Timestamp(start_date)].pct_change().dropna()
-    mean_ret, cov = rets.mean() * 252, rets.cov() * 252
-    curr_w = np.array([shares_dict[t] * raw_data_all[t].iloc[-1] for t in final_list]); curr_w /= np.sum(curr_w)
-    curr_r, curr_v = np.sum(mean_ret * curr_w), np.sqrt(np.dot(curr_w.T, np.dot(cov, curr_w)))
-    res = np.zeros((3, n_portfolios)); w_store = []
+    st.divider()
+
+    # --- SECTION 2 : FRONTIÈRE EFFICIENTE ---
+    st.header("2️⃣ Optimisation de la Frontière Efficiente")
+    
+    mean_ret = rets_daily.mean() * 252
+    cov_matrix_opt = rets_daily.cov() * 252
+    
+    # Portefeuille actuel
+    weights_curr = np.array([shares_dict[t] * last_prices[t] for t in final_list])
+    weights_curr /= np.sum(weights_curr)
+    curr_ret = np.sum(mean_ret * weights_curr)
+    curr_vol = np.sqrt(np.dot(weights_curr.T, np.dot(cov_matrix_opt, weights_curr)))
+    
+    # Simulation Portefeuilles Aléatoires
+    n_portfolios = 5000
+    results = np.zeros((3, n_portfolios))
+    w_store = []
+    
     for i in range(n_portfolios):
-        w = np.random.random(len(final_list)); w /= np.sum(w); w_store.append(w)
-        r, v = np.sum(mean_ret * w), np.sqrt(np.dot(w.T, np.dot(cov, w)))
-        res[0,i], res[1,i], res[2,i] = r, v, (r - rf_rate) / v
-    best_idx = np.argmax(res[2])
-    st.subheader("🎯 Optimisation Stratégique")
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        fig, ax = plt.subplots(figsize=(10, 6), facecolor='none'); ax.set_facecolor('none')
-        ax.scatter(res[1,:], res[0,:], c=res[2,:], cmap='viridis', s=10, alpha=0.3)
-        ax.scatter(res[1,best_idx], res[0,best_idx], marker='*', color='r', s=200, label='Optimal')
-        ax.scatter(curr_v, curr_r, marker='D', color='white', s=150, edgecolors='black', label='Actuel')
-        plt.rcParams.update({"text.color": "white", "axes.labelcolor": "white", "xtick.color": "white", "ytick.color": "white"})
-        ax.legend(); st.pyplot(fig, transparent=True)
-    with c2:
-        alloc = pd.DataFrame({'Actuel %': [round(x*100, 1) for x in curr_w], 'Optimal %': [round(x*100, 1) for x in w_store[best_idx]]}, index=final_list)
-        st.table(alloc)
+        w = np.random.random(len(final_list))
+        w /= np.sum(w)
+        w_store.append(w)
+        r = np.sum(mean_ret * w)
+        v = np.sqrt(np.dot(w.T, np.dot(cov_matrix_opt, w)))
+        results[0,i], results[1,i], results[2,i] = r, v, (r - rf_rate) / v
+        
+    best_idx = np.argmax(results[2])
+    best_w = w_store[best_idx]
+    
+    col3, col4 = st.columns([2, 1])
+    with col3:
+        fig2, ax2 = plt.subplots(figsize=(10, 5), facecolor='none'); ax2.set_facecolor('none')
+        ax2.scatter(results[1,:], results[0,:], c=results[2,:], cmap='viridis', s=10, alpha=0.3)
+        ax2.scatter(curr_vol, curr_ret, marker='D', color='white', s=100, label='Votre Portefeuille')
+        ax2.scatter(results[1,best_idx], results[0,best_idx], marker='*', color='red', s=200, label='Optimal (Sharpe)')
+        ax2.set_xlabel("Volatilité (Risque)"); ax2.set_ylabel("Rendement Attendu")
+        ax2.legend(); st.pyplot(fig2, transparent=True)
+        
+    with col4:
+        st.subheader("⚖️ Réallocation Suggérée")
+        comparison = pd.DataFrame({
+            "Actuel %": weights_curr * 100,
+            "Optimal %": best_w * 100
+        }, index=final_list).round(1)
+        st.table(comparison)
