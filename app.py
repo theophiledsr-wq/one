@@ -28,7 +28,7 @@ def display_animated_ticker():
     except: pass
 
 display_animated_ticker()
-st.title("THE FRENCH BUILT TOOL FOR STRATEGIC INVESTING")
+st.title("L'outil idéal pour l'investisseur prévoyant")
 
 def get_full_ticker_info(symbol):
     try:
