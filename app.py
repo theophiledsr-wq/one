@@ -1,6 +1,7 @@
 import streamlit as st
 import yfinance as yf
 import numpy as np
+import matplotlib.subplots
 import matplotlib.pyplot as plt
 import pandas as pd
 import datetime
@@ -65,9 +66,11 @@ with st.sidebar:
             name = data.get("name", t)
             logo = data.get("logo", "")
             
-            c1, c2, c3 = st.columns([1, 4, 1])
+            # Modification ici : on donne un peu plus de place à la colonne 1 pour le gros logo
+            c1, c2, c3 = st.columns([1.2, 4, 1])
             if logo:
-                c1.markdown(f'<img src="{logo}" width="25" style="border-radius:50%;">', unsafe_allow_html=True)
+                # Modification ici : width passé à 45 pour un logo plus grand
+                c1.markdown(f'<img src="{logo}" width="45" style="border-radius:50%; box-shadow: 0 2px 4px rgba(0,0,0,0.5);">', unsafe_allow_html=True)
             else:
                 c1.write("📊")
             c2.caption(f"**{t}** : {name}")
@@ -124,16 +127,31 @@ def calc_all_kpis(port_rets, bench_rets, rf_rate):
     
     return sharpe, sortino, calmar, ulcer_index, alpha, beta
 
-def plot_pie_chart(weights, labels, title):
+# --- NOUVELLE FONCTION GRAPHIQUE EN ANNEAU (DONUT) ---
+def plot_donut_chart(weights, labels, title):
     fig, ax = plt.subplots(figsize=(3, 3), facecolor='none')
     ax.set_facecolor('none')
+    
+    # Filtrer les petits pourcentages pour la lisibilité
     mask = weights > 0.01
     w_filtered = weights[mask]
     l_filtered = np.array(labels)[mask]
     
-    ax.pie(w_filtered, labels=l_filtered, autopct='%1.1f%%', textprops={'color': "white", 'fontsize': 8}, 
-           colors=plt.cm.Set3.colors[:len(w_filtered)])
-    ax.set_title(title, color='white', fontsize=10, pad=10)
+    # Palette de couleurs "Pro" et douces (inspirée des terminaux financiers)
+    prof_colors = ['#5A8DBC', '#E1955D', '#6EAF7B', '#D0696B', '#9D86C2', '#A18572', '#D59EC4', '#7D8285', '#C4B454', '#60A5FA']
+    
+    # Paramètre wedgeprops pour créer le trou au centre (width) et une belle bordure
+    wedges, texts, autotexts = ax.pie(
+        w_filtered, 
+        labels=l_filtered, 
+        autopct='%1.1f%%', 
+        pctdistance=0.75,
+        textprops={'color': "white", 'fontsize': 8, 'weight': 'bold'}, 
+        colors=prof_colors[:len(w_filtered)],
+        wedgeprops=dict(width=0.4, edgecolor='#0e1117', linewidth=1.5) # Le width crée l'anneau
+    )
+    
+    ax.set_title(title, color='white', fontsize=11, pad=10, weight='bold')
     return fig
 
 # --- DÉCLENCHEMENT DE L'ANALYSE AVEC SESSION STATE ---
@@ -156,7 +174,6 @@ if st.session_state.get('run_analysis', False):
     
     with col_controls:
         st.subheader("Période d'analyse")
-        # Le changement ici ne fera plus planter la page grâce au session_state
         period_choice = st.radio("Sélectionnez l'horizon :", ["1 Mois", "3 Mois", "6 Mois", "1 An", "Depuis l'origine"], index=4)
         
         end_d = port_hist_val.index[-1]
@@ -173,18 +190,17 @@ if st.session_state.get('run_analysis', False):
         rets_p = port_hist_filtered.pct_change().dropna()
         rets_sp = sp_hist_filtered.pct_change().dropna()
         
-        # Calculs KPIs Portefeuille ET S&P 500
         p_sharpe, p_sortino, p_calmar, p_ulcer, p_alpha, p_beta = calc_all_kpis(rets_p, rets_sp, rf_rate)
         sp_sharpe, sp_sortino, sp_calmar, sp_ulcer, _, _ = calc_all_kpis(rets_sp, rets_sp, rf_rate)
 
     with col_graph:
         fig_hist, ax_hist = plt.subplots(figsize=(10, 4), facecolor='none')
         ax_hist.set_facecolor('none')
-        ax_hist.plot(port_hist_filtered.index, port_hist_filtered, color='#00ff00', label='Portefeuille')
-        ax_hist.plot(sp_hist_filtered.index, sp_hist_filtered, color='orange', ls='--', label='S&P 500 (Base)')
+        ax_hist.plot(port_hist_filtered.index, port_hist_filtered, color='#5A8DBC', lw=2, label='Portefeuille')
+        ax_hist.plot(sp_hist_filtered.index, sp_hist_filtered, color='#7D8285', ls='--', lw=1.5, label='S&P 500 (Base)')
         ax_hist.set_ylabel("Valeur (€)", color='white')
         ax_hist.legend(frameon=False, labelcolor='white')
-        ax_hist.grid(alpha=0.2)
+        ax_hist.grid(alpha=0.1)
         ax_hist.tick_params(colors='white')
         st.pyplot(fig_hist, transparent=True)
 
@@ -238,10 +254,10 @@ if st.session_state.get('run_analysis', False):
     with col1:
         fig1, ax1 = plt.subplots(figsize=(10, 5), facecolor='none')
         ax1.set_facecolor('none')
-        ax1.plot(p95, color='#00ff00', label='Optimiste (95%)', alpha=0.6)
+        ax1.plot(p95, color='#6EAF7B', label='Optimiste (95%)', alpha=0.6)
         ax1.plot(p50, color='white', lw=3, label='Médian Portefeuille')
-        ax1.plot(sp_p50, color='orange', lw=2, ls='--', label='Médian S&P 500')
-        ax1.plot(p5, color='#ff4b4b', label='Pessimiste (5%)', alpha=0.6)
+        ax1.plot(sp_p50, color='#E1955D', lw=2, ls='--', label='Médian S&P 500')
+        ax1.plot(p5, color='#D0696B', label='Pessimiste (5%)', alpha=0.6)
         ax1.fill_between(range(horizon), p5, p95, color='gray', alpha=0.1)
         ax1.legend(frameon=False, labelcolor='white')
         ax1.tick_params(colors='white')
@@ -297,27 +313,27 @@ if st.session_state.get('run_analysis', False):
     ax2.set_facecolor('none')
     scatter = ax2.scatter(ann_vols_arr, ann_rets_arr, c=sharpes_arr, cmap='viridis', s=5, alpha=0.3)
     ax2.scatter(curr_vol, curr_ret, marker='D', color='white', s=100, label='Actuel', edgecolors='black')
-    ax2.scatter(ann_vols_arr[idx_sharpe], ann_rets_arr[idx_sharpe], marker='*', color='red', s=150, label='Max Sharpe')
-    ax2.scatter(ann_vols_arr[idx_sortino], ann_rets_arr[idx_sortino], marker='^', color='orange', s=100, label='Max Sortino')
-    ax2.scatter(ann_vols_arr[idx_cagr], ann_rets_arr[idx_cagr], marker='P', color='cyan', s=100, label='Max CAGR')
-    ax2.scatter(ann_vols_arr[idx_ulcer], ann_rets_arr[idx_ulcer], marker='v', color='magenta', s=100, label='Min Ulcer (Sécurité)')
+    ax2.scatter(ann_vols_arr[idx_sharpe], ann_rets_arr[idx_sharpe], marker='*', color='#D0696B', s=150, label='Max Sharpe')
+    ax2.scatter(ann_vols_arr[idx_sortino], ann_rets_arr[idx_sortino], marker='^', color='#E1955D', s=100, label='Max Sortino')
+    ax2.scatter(ann_vols_arr[idx_cagr], ann_rets_arr[idx_cagr], marker='P', color='#5A8DBC', s=100, label='Max CAGR')
+    ax2.scatter(ann_vols_arr[idx_ulcer], ann_rets_arr[idx_ulcer], marker='v', color='#9D86C2', s=100, label='Min Ulcer (Sécurité)')
     ax2.set_xlabel("Volatilité (Risque)", color='white')
     ax2.set_ylabel("Rendement Attendu", color='white')
     ax2.tick_params(colors='white')
     ax2.legend(frameon=False, labelcolor='white', bbox_to_anchor=(1.05, 1), loc='upper left')
     st.pyplot(fig2, transparent=True)
 
-    # --- Répartition Camemberts ---
+    # --- Répartition Anneaux (Remplacement des camemberts) ---
     st.subheader("Répartitions Optimales Suggérées")
     c_pie1, c_pie2, c_pie3, c_pie4, c_pie5 = st.columns(5)
     
-    with c_pie1: st.pyplot(plot_pie_chart(weights_curr, final_list, "Actuel"), transparent=True)
-    with c_pie2: st.pyplot(plot_pie_chart(w_matrix[:, idx_sharpe], final_list, "Max Sharpe\n(Rendement/Risque)"), transparent=True)
-    with c_pie3: st.pyplot(plot_pie_chart(w_matrix[:, idx_sortino], final_list, "Max Sortino\n(Risque Baisse)"), transparent=True)
-    with c_pie4: st.pyplot(plot_pie_chart(w_matrix[:, idx_cagr], final_list, "Max CAGR\n(Croissance)"), transparent=True)
-    with c_pie5: st.pyplot(plot_pie_chart(w_matrix[:, idx_ulcer], final_list, "Min Ulcer\n(Sommeil tranquille)"), transparent=True)
+    with c_pie1: st.pyplot(plot_donut_chart(weights_curr, final_list, "Actuel"), transparent=True)
+    with c_pie2: st.pyplot(plot_donut_chart(w_matrix[:, idx_sharpe], final_list, "Max Sharpe\n(Rendement/Risque)"), transparent=True)
+    with c_pie3: st.pyplot(plot_donut_chart(w_matrix[:, idx_sortino], final_list, "Max Sortino\n(Risque Baisse)"), transparent=True)
+    with c_pie4: st.pyplot(plot_donut_chart(w_matrix[:, idx_cagr], final_list, "Max CAGR\n(Croissance)"), transparent=True)
+    with c_pie5: st.pyplot(plot_donut_chart(w_matrix[:, idx_ulcer], final_list, "Min Ulcer\n(Tranquillité)"), transparent=True)
 
-    # --- NOUVEAU : Tableau multi-profils direct (Parts et Poids) ---
+    # --- Tableau multi-profils direct (Parts et Poids) ---
     st.subheader("Plans d'Action Multi-Stratégies")
     
     profiles = {
