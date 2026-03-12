@@ -32,15 +32,26 @@ st.title("PORTFOLIO MASTER PRO PREMIUM : L'outil de pilotage de portefeuille")
 
 def get_full_ticker_info(symbol):
     try:
-        search = yf.Search(symbol, max_results=1)
-        if search.quotes: return search.quotes[0].get('longname') or search.quotes[0].get('shortname')
-        return yf.Ticker(symbol).info.get('longName') or symbol
-    except: return symbol
+        tk = yf.Ticker(symbol)
+        info = tk.info
+        name = info.get('longName') or info.get('shortName') or symbol
+        
+        # Récupération du logo via le domaine du site web
+        website = info.get('website', '')
+        domain = website.replace('https://www.', '').replace('http://www.', '').replace('https://', '').replace('http://', '').split('/')[0]
+        logo_url = f"https://logo.clearbit.com/{domain}" if domain else ""
+        
+        return {"name": name, "logo": logo_url}
+    except: 
+        return {"name": symbol, "logo": ""}
 
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("🛒 Portefeuille")
-    if 'portfolio' not in st.session_state: st.session_state.portfolio = {}
+    
+    # Réinitialisation si l'ancien format (texte simple) est en mémoire
+    if 'portfolio' not in st.session_state or (st.session_state.portfolio and isinstance(list(st.session_state.portfolio.values())[0], str)): 
+        st.session_state.portfolio = {}
     
     search_input = st.text_input("Ajouter Ticker (ex: MC.PA, ASML, BTC-USD) :").upper()
     if st.button("➕ Ajouter"):
@@ -50,11 +61,21 @@ with st.sidebar:
 
     if st.session_state.portfolio:
         to_delete = []
-        for t, name in st.session_state.portfolio.items():
-            c1, c2 = st.columns([4, 1])
-            c1.caption(f"**{t}** : {name}")
-            if c2.button("x", key=f"del_{t}"): to_delete.append(t)
-        for t in to_delete: del st.session_state.portfolio[t]; st.rerun()
+        for t, data in st.session_state.portfolio.items():
+            name = data.get("name", t)
+            logo = data.get("logo", "")
+            
+            c1, c2, c3 = st.columns([1, 4, 1])
+            if logo:
+                c1.markdown(f'<img src="{logo}" width="25" style="border-radius:50%;">', unsafe_allow_html=True)
+            else:
+                c1.write("📊")
+            c2.caption(f"**{t}** : {name}")
+            if c3.button("x", key=f"del_{t}"): to_delete.append(t)
+            
+        for t in to_delete: 
+            del st.session_state.portfolio[t]
+            st.rerun()
 
     final_list = list(st.session_state.portfolio.keys())
     if not final_list: st.info("Ajoutez des actifs pour commencer."); st.stop()
@@ -67,7 +88,9 @@ with st.sidebar:
     horizon = st.number_input("Horizon de projection (jours)", value=252)
     rf_rate = st.number_input("Taux sans risque %", value=3.0) / 100
     n_portfolios = st.number_input("Simulations Frontière", value=5000, min_value=1000, step=1000)
-    run_btn = st.button("🚀 LANCER L'ANALYSE GLOBALE")
+    
+    if st.button("🚀 LANCER L'ANALYSE GLOBALE"):
+        st.session_state.run_analysis = True
 
 # --- CHARGEMENT DES DONNÉES ---
 @st.cache_data
@@ -101,11 +124,9 @@ def calc_all_kpis(port_rets, bench_rets, rf_rate):
     
     return sharpe, sortino, calmar, ulcer_index, alpha, beta
 
-# --- FONCTION GRAPHIQUE CAMEMBERT ---
 def plot_pie_chart(weights, labels, title):
     fig, ax = plt.subplots(figsize=(3, 3), facecolor='none')
     ax.set_facecolor('none')
-    # Filtrer les poids trop petits pour la lisibilité
     mask = weights > 0.01
     w_filtered = weights[mask]
     l_filtered = np.array(labels)[mask]
@@ -115,7 +136,9 @@ def plot_pie_chart(weights, labels, title):
     ax.set_title(title, color='white', fontsize=10, pad=10)
     return fig
 
-if run_btn:
+# --- DÉCLENCHEMENT DE L'ANALYSE AVEC SESSION STATE ---
+if st.session_state.get('run_analysis', False):
+    
     # --- PRÉPARATION DES DONNÉES ---
     df = raw_data[raw_data.index >= pd.Timestamp(start_date)]
     df_port = df[final_list]
@@ -133,6 +156,7 @@ if run_btn:
     
     with col_controls:
         st.subheader("Période d'analyse")
+        # Le changement ici ne fera plus planter la page grâce au session_state
         period_choice = st.radio("Sélectionnez l'horizon :", ["1 Mois", "3 Mois", "6 Mois", "1 An", "Depuis l'origine"], index=4)
         
         end_d = port_hist_val.index[-1]
@@ -149,7 +173,9 @@ if run_btn:
         rets_p = port_hist_filtered.pct_change().dropna()
         rets_sp = sp_hist_filtered.pct_change().dropna()
         
+        # Calculs KPIs Portefeuille ET S&P 500
         p_sharpe, p_sortino, p_calmar, p_ulcer, p_alpha, p_beta = calc_all_kpis(rets_p, rets_sp, rf_rate)
+        sp_sharpe, sp_sortino, sp_calmar, sp_ulcer, _, _ = calc_all_kpis(rets_sp, rets_sp, rf_rate)
 
     with col_graph:
         fig_hist, ax_hist = plt.subplots(figsize=(10, 4), facecolor='none')
@@ -166,10 +192,10 @@ if run_btn:
     kpi_df = pd.DataFrame({
         "Alpha (Surperf.)": [f"{p_alpha*100:+.2f}%", "0.00%"],
         "Beta (Volatilité Rel.)": [f"{p_beta:.2f}", "1.00"],
-        "Sharpe Ratio": [f"{p_sharpe:.2f}", f"{(rets_sp.mean()*252 - rf_rate)/(rets_sp.std()*np.sqrt(252)):.2f}"],
-        "Sortino Ratio": [f"{p_sortino:.2f}", f"{(rets_sp.mean()*252 - rf_rate)/(rets_sp[rets_sp<0].std()*np.sqrt(252)):.2f}"],
-        "Calmar Ratio": [f"{p_calmar:.2f}", "-"],
-        "Ulcer Index": [f"{p_ulcer:.2f}%", "-"]
+        "Sharpe Ratio": [f"{p_sharpe:.2f}", f"{sp_sharpe:.2f}"],
+        "Sortino Ratio": [f"{p_sortino:.2f}", f"{sp_sortino:.2f}"],
+        "Calmar Ratio": [f"{p_calmar:.2f}", f"{sp_calmar:.2f}"],
+        "Ulcer Index": [f"{p_ulcer:.2f}%", f"{sp_ulcer:.2f}%"]
     }, index=["Portefeuille", "S&P 500"])
     st.table(kpi_df)
 
@@ -226,7 +252,7 @@ if run_btn:
         st.metric("Probabilité de Plus-Value", f"{proba_gain:.1f} %")
         st.metric("Proba. de perte > 10%", f"{proba_loss_10:.1f} %", help="Risque de perdre plus de 10% du capital.")
         st.metric("Value at Risk (95%)", f"- {var_95:,.0f} €", help="Perte au centile 5%.")
-        st.metric("CVaR (Expected Shortfall 95%)", f"- {cvar_95:,.0f} €", help="Moyenne des pertes dans les 5% des pires scénarios. Très robuste.")
+        st.metric("CVaR (Expected Shortfall 95%)", f"- {cvar_95:,.0f} €", help="Moyenne des pertes dans les 5% des pires scénarios.")
 
     st.divider()
 
@@ -235,24 +261,19 @@ if run_btn:
     
     rets_daily_assets = df_port.pct_change().dropna()
     
-    # Génération de poids aléatoires uniformes (Dirichlet)
     np.random.seed(42)
-    w_matrix = np.random.dirichlet(np.ones(len(final_list)), n_portfolios).T # Shape: (N_assets, N_portfolios)
+    w_matrix = np.random.dirichlet(np.ones(len(final_list)), n_portfolios).T
     
-    # Calcul matriciel des rendements quotidiens des N portefeuilles
-    port_rets_matrix = rets_daily_assets.values @ w_matrix # Shape: (T_days, N_portfolios)
+    port_rets_matrix = rets_daily_assets.values @ w_matrix
     
-    # 1. Rendements et Volatilités annualisés
     ann_rets_arr = np.mean(port_rets_matrix, axis=0) * 252
     ann_vols_arr = np.std(port_rets_matrix, axis=0) * np.sqrt(252)
     sharpes_arr = (ann_rets_arr - rf_rate) / ann_vols_arr
     
-    # 2. Sortino
     downside_rets = np.minimum(port_rets_matrix, 0)
     down_vols_arr = np.std(downside_rets, axis=0) * np.sqrt(252)
     sortinos_arr = np.divide((ann_rets_arr - rf_rate), down_vols_arr, out=np.zeros_like(ann_rets_arr), where=down_vols_arr!=0)
     
-    # 3. Drawdowns, Calmar, Ulcer, CAGR
     cum_rets_matrix = np.cumprod(1 + port_rets_matrix, axis=0)
     running_max_matrix = np.maximum.accumulate(cum_rets_matrix, axis=0)
     dds_matrix = (cum_rets_matrix - running_max_matrix) / running_max_matrix
@@ -262,10 +283,8 @@ if run_btn:
     ulcers_arr = np.sqrt(np.mean(dds_matrix**2, axis=0)) * 100
     cagrs_arr = (cum_rets_matrix[-1, :] ** (252 / len(port_rets_matrix))) - 1
     
-    # --- Identification des meilleurs profils ---
     idx_sharpe = np.argmax(sharpes_arr)
     idx_sortino = np.argmax(sortinos_arr)
-    idx_calmar = np.argmax(calmars_arr)
     idx_cagr = np.argmax(cagrs_arr)
     idx_ulcer = np.argmin(ulcers_arr)
     
@@ -274,7 +293,6 @@ if run_btn:
     curr_ret = np.sum(rets_daily_assets.mean() * 252 * weights_curr)
     curr_vol = np.sqrt(np.dot(weights_curr.T, np.dot(rets_daily_assets.cov() * 252, weights_curr)))
 
-    # Graphique Frontière
     fig2, ax2 = plt.subplots(figsize=(10, 4), facecolor='none')
     ax2.set_facecolor('none')
     scatter = ax2.scatter(ann_vols_arr, ann_rets_arr, c=sharpes_arr, cmap='viridis', s=5, alpha=0.3)
@@ -299,25 +317,31 @@ if run_btn:
     with c_pie4: st.pyplot(plot_pie_chart(w_matrix[:, idx_cagr], final_list, "Max CAGR\n(Croissance)"), transparent=True)
     with c_pie5: st.pyplot(plot_pie_chart(w_matrix[:, idx_ulcer], final_list, "Min Ulcer\n(Sommeil tranquille)"), transparent=True)
 
-    # --- Tableau des Valeurs et Parts ---
-    st.subheader("Action : Réallocation en Euros et Nombre de Parts")
+    # --- NOUVEAU : Tableau multi-profils direct (Parts et Poids) ---
+    st.subheader("Plans d'Action Multi-Stratégies")
     
-    selected_opt = st.selectbox("Choisissez le profil à appliquer :", 
-                                ["Max Sharpe", "Max Sortino", "Max CAGR", "Min Ulcer", "Max Calmar"])
+    profiles = {
+        "Max Sharpe": idx_sharpe, 
+        "Max Sortino": idx_sortino, 
+        "Max CAGR": idx_cagr, 
+        "Min Ulcer": idx_ulcer
+    }
+
+    c_tab1, c_tab2 = st.columns(2)
     
-    opt_map = {"Max Sharpe": idx_sharpe, "Max Sortino": idx_sortino, "Max CAGR": idx_cagr, 
-               "Min Ulcer": idx_ulcer, "Max Calmar": idx_calmar}
-    
-    chosen_w = w_matrix[:, opt_map[selected_opt]]
-    target_value_eur = chosen_w * total_val_init
-    target_shares = np.round(target_value_eur / last_prices.values)
-    
-    comparison = pd.DataFrame({
-        "Val Actuelle (€)": (weights_curr * total_val_init).round(0),
-        "Parts Actuelles": [shares_dict[t] for t in final_list],
-        "Cible Optimale (€)": target_value_eur.round(0),
-        "Nouvelles Parts": target_shares.astype(int),
-        "Différence (€)": (target_value_eur - (weights_curr * total_val_init)).round(0)
-    }, index=final_list)
-    
-    st.table(comparison)
+    with c_tab1:
+        st.markdown("**Allocation en Nombre de Parts**")
+        shares_df = pd.DataFrame(index=final_list)
+        shares_df["Parts Actuelles"] = [shares_dict[t] for t in final_list]
+        for p_name, p_idx in profiles.items():
+            target_val = w_matrix[:, p_idx] * total_val_init
+            shares_df[f"{p_name}"] = np.round(target_val / last_prices.values).astype(int)
+        st.dataframe(shares_df, use_container_width=True)
+
+    with c_tab2:
+        st.markdown("**Pondération du Portefeuille (%)**")
+        weights_df = pd.DataFrame(index=final_list)
+        weights_df["Actuel (%)"] = (weights_curr * 100).round(1)
+        for p_name, p_idx in profiles.items():
+            weights_df[f"{p_name} (%)"] = (w_matrix[:, p_idx] * 100).round(1)
+        st.dataframe(weights_df, use_container_width=True)
