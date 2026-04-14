@@ -49,7 +49,6 @@ def get_full_ticker_info(symbol):
 with st.sidebar:
     st.header("🛒 Portefeuille")
     
-    # Réinitialisation si l'ancien format (texte simple) est en mémoire
     if 'portfolio' not in st.session_state or (st.session_state.portfolio and isinstance(list(st.session_state.portfolio.values())[0], str)): 
         st.session_state.portfolio = {}
     
@@ -84,6 +83,17 @@ with st.sidebar:
     shares_dict = {t: st.number_input(f"Quantité {t}", value=10, min_value=1) for t in final_list}
     
     st.subheader("⚙️ Paramètres")
+    
+    # --- CHOIX DU BENCHMARK ---
+    benchmarks_dict = {
+        "S&P 500": "^GSPC",
+        "MSCI World (ETF)": "URTH",
+        "CAC 40": "^FCHI"
+    }
+    bench_name = st.radio("Sélectionner le Benchmark :", list(benchmarks_dict.keys()))
+    bench_ticker = benchmarks_dict[bench_name]
+    # ---------------------------
+
     start_date = st.date_input("Historique de référence :", datetime.date(2021, 1, 1))
     horizon = st.number_input("Horizon de projection (jours)", value=252)
     rf_rate = st.number_input("Taux sans risque %", value=3.0) / 100
@@ -94,11 +104,11 @@ with st.sidebar:
 
 # --- CHARGEMENT DES DONNÉES ---
 @st.cache_data
-def load_data_all(tickers):
-    all_t = list(set(tickers + ["^GSPC"]))
+def load_data_all(tickers, benchmark):
+    all_t = list(set(tickers + [benchmark]))
     return yf.download(all_t, start="2015-01-01", progress=False)['Close'].ffill().dropna()
 
-raw_data = load_data_all(final_list)
+raw_data = load_data_all(final_list, bench_ticker)
 
 # --- FONCTIONS KPI ---
 def calc_all_kpis(port_rets, bench_rets, rf_rate):
@@ -142,13 +152,13 @@ if st.session_state.get('run_analysis', False):
     # --- PRÉPARATION DES DONNÉES ---
     df = raw_data[raw_data.index >= pd.Timestamp(start_date)]
     df_port = df[final_list]
-    df_sp = df["^GSPC"]
+    df_bench = df[bench_ticker]
     
     last_prices = df_port.iloc[-1]
     total_val_init = sum(last_prices[t] * shares_dict[t] for t in final_list)
 
     port_hist_val = (df_port * [shares_dict[t] for t in final_list]).sum(axis=1)
-    sp_hist_val = (df_sp / df_sp.iloc[0]) * port_hist_val.iloc[0]
+    bench_hist_val = (df_bench / df_bench.iloc[0]) * port_hist_val.iloc[0]
 
     # --- SECTION : DONNÉES HISTORIQUES ---
     st.header("Analyse Historique & Performance")
@@ -156,7 +166,6 @@ if st.session_state.get('run_analysis', False):
     
     with col_controls:
         st.subheader("Période d'analyse")
-        # Le changement ici ne fera plus planter la page grâce au session_state
         period_choice = st.radio("Sélectionnez l'horizon :", ["1 Mois", "3 Mois", "6 Mois", "1 An", "Depuis l'origine"], index=4)
         
         end_d = port_hist_val.index[-1]
@@ -168,20 +177,20 @@ if st.session_state.get('run_analysis', False):
         
         mask = (port_hist_val.index >= start_d)
         port_hist_filtered = port_hist_val[mask]
-        sp_hist_filtered = (df_sp[mask] / df_sp[mask].iloc[0]) * port_hist_filtered.iloc[0]
+        bench_hist_filtered = (df_bench[mask] / df_bench[mask].iloc[0]) * port_hist_filtered.iloc[0]
 
         rets_p = port_hist_filtered.pct_change().dropna()
-        rets_sp = sp_hist_filtered.pct_change().dropna()
+        rets_bench = bench_hist_filtered.pct_change().dropna()
         
-        # Calculs KPIs Portefeuille ET S&P 500
-        p_sharpe, p_sortino, p_calmar, p_ulcer, p_alpha, p_beta = calc_all_kpis(rets_p, rets_sp, rf_rate)
-        sp_sharpe, sp_sortino, sp_calmar, sp_ulcer, _, _ = calc_all_kpis(rets_sp, rets_sp, rf_rate)
+        # Calculs KPIs Portefeuille ET Benchmark
+        p_sharpe, p_sortino, p_calmar, p_ulcer, p_alpha, p_beta = calc_all_kpis(rets_p, rets_bench, rf_rate)
+        bench_sharpe, bench_sortino, bench_calmar, bench_ulcer, _, _ = calc_all_kpis(rets_bench, rets_bench, rf_rate)
 
     with col_graph:
         fig_hist, ax_hist = plt.subplots(figsize=(10, 4), facecolor='none')
         ax_hist.set_facecolor('none')
         ax_hist.plot(port_hist_filtered.index, port_hist_filtered, color='#00ff00', label='Portefeuille')
-        ax_hist.plot(sp_hist_filtered.index, sp_hist_filtered, color='orange', ls='--', label='S&P 500 (Base)')
+        ax_hist.plot(bench_hist_filtered.index, bench_hist_filtered, color='orange', ls='--', label=f'{bench_name} (Base)')
         ax_hist.set_ylabel("Valeur (€)", color='white')
         ax_hist.legend(frameon=False, labelcolor='white')
         ax_hist.grid(alpha=0.2)
@@ -192,11 +201,11 @@ if st.session_state.get('run_analysis', False):
     kpi_df = pd.DataFrame({
         "Alpha (Surperf.)": [f"{p_alpha*100:+.2f}%", "0.00%"],
         "Beta (Volatilité Rel.)": [f"{p_beta:.2f}", "1.00"],
-        "Sharpe Ratio": [f"{p_sharpe:.2f}", f"{sp_sharpe:.2f}"],
-        "Sortino Ratio": [f"{p_sortino:.2f}", f"{sp_sortino:.2f}"],
-        "Calmar Ratio": [f"{p_calmar:.2f}", f"{sp_calmar:.2f}"],
-        "Ulcer Index": [f"{p_ulcer:.2f}%", f"{sp_ulcer:.2f}%"]
-    }, index=["Portefeuille", "S&P 500"])
+        "Sharpe Ratio": [f"{p_sharpe:.2f}", f"{bench_sharpe:.2f}"],
+        "Sortino Ratio": [f"{p_sortino:.2f}", f"{bench_sortino:.2f}"],
+        "Calmar Ratio": [f"{p_calmar:.2f}", f"{bench_calmar:.2f}"],
+        "Ulcer Index": [f"{p_ulcer:.2f}%", f"{bench_ulcer:.2f}%"]
+    }, index=["Portefeuille", bench_name])
     st.table(kpi_df)
 
     st.divider()
@@ -217,17 +226,17 @@ if st.session_state.get('run_analysis', False):
     portfolio_paths = np.sum(price_paths * [shares_dict[t] for t in final_list], axis=2)
     final_vals = portfolio_paths[-1, :]
     
-    sp_paths = np.zeros((horizon, n_sims_mc))
-    sp_temp = np.full(n_sims_mc, total_val_init)
-    vol_sp = np.log(df_sp / df_sp.shift(1)).std()
+    bench_paths = np.zeros((horizon, n_sims_mc))
+    bench_temp = np.full(n_sims_mc, total_val_init)
+    vol_bench = np.log(df_bench / df_bench.shift(1)).std()
     for t in range(horizon):
-        sp_temp *= np.exp(np.random.normal(0, 1, n_sims_mc) * vol_sp)
-        sp_paths[t] = sp_temp
+        bench_temp *= np.exp(np.random.normal(0, 1, n_sims_mc) * vol_bench)
+        bench_paths[t] = bench_temp
         
     p50 = portfolio_paths[:, np.argsort(final_vals)[int(n_sims_mc*0.5)]]
     p5 = portfolio_paths[:, np.argsort(final_vals)[int(n_sims_mc*0.05)]]
     p95 = portfolio_paths[:, np.argsort(final_vals)[int(n_sims_mc*0.95)]]
-    sp_p50 = sp_paths[:, np.argsort(sp_paths[-1, :])[int(n_sims_mc*0.5)]]
+    bench_p50 = bench_paths[:, np.argsort(bench_paths[-1, :])[int(n_sims_mc*0.5)]]
     
     proba_gain = (final_vals > total_val_init).mean() * 100
     proba_loss_10 = (final_vals < total_val_init * 0.9).mean() * 100
@@ -240,7 +249,7 @@ if st.session_state.get('run_analysis', False):
         ax1.set_facecolor('none')
         ax1.plot(p95, color='#00ff00', label='Optimiste (95%)', alpha=0.6)
         ax1.plot(p50, color='white', lw=3, label='Médian Portefeuille')
-        ax1.plot(sp_p50, color='orange', lw=2, ls='--', label='Médian S&P 500')
+        ax1.plot(bench_p50, color='orange', lw=2, ls='--', label=f'Médian {bench_name}')
         ax1.plot(p5, color='#ff4b4b', label='Pessimiste (5%)', alpha=0.6)
         ax1.fill_between(range(horizon), p5, p95, color='gray', alpha=0.1)
         ax1.legend(frameon=False, labelcolor='white')
