@@ -35,12 +35,9 @@ def get_full_ticker_info(symbol):
         tk = yf.Ticker(symbol)
         info = tk.info
         name = info.get('longName') or info.get('shortName') or symbol
-        
-        # Récupération du logo via le domaine du site web
         website = info.get('website', '')
         domain = website.replace('https://www.', '').replace('http://www.', '').replace('https://', '').replace('http://', '').split('/')[0]
         logo_url = f"https://logo.clearbit.com/{domain}" if domain else ""
-        
         return {"name": name, "logo": logo_url}
     except: 
         return {"name": symbol, "logo": ""}
@@ -82,9 +79,8 @@ with st.sidebar:
     st.divider()
     shares_dict = {t: st.number_input(f"Quantité {t}", value=10, min_value=1) for t in final_list}
     
-    st.subheader("⚙️ Paramètres")
+    st.subheader("⚙️ Paramètres Globaux")
     
-    # --- CHOIX DU BENCHMARK ---
     benchmarks_dict = {
         "S&P 500": "^GSPC",
         "MSCI World (ETF)": "URTH",
@@ -92,13 +88,29 @@ with st.sidebar:
     }
     bench_name = st.radio("Sélectionner le Benchmark :", list(benchmarks_dict.keys()))
     bench_ticker = benchmarks_dict[bench_name]
-    # ---------------------------
 
     start_date = st.date_input("Historique de référence :", datetime.date(2021, 1, 1))
     horizon = st.number_input("Horizon de projection (jours)", value=252)
     rf_rate = st.number_input("Taux sans risque %", value=3.0) / 100
     n_portfolios = st.number_input("Simulations Frontière", value=5000, min_value=1000, step=1000)
     
+    st.divider()
+    
+    # --- CHOIX MONTE CARLO ---
+    st.subheader("🎲 Modèle Monte Carlo")
+    mc_type = st.radio("Type de simulation :", ["Normale (GBM)", "Student-T (Fat Tails)", "Bootstrap Historique"])
+    
+    # Variables pour stocker les paramètres spécifiques
+    mc_drift = False
+    mc_df = 4.0
+    
+    if mc_type == "Normale (GBM)":
+        mc_drift = st.checkbox("Inclure le Drift historique", value=False, help="Si coché, la simulation prolonge la tendance moyenne historique. Si décoché, l'espérance de rendement est de 0 (plus prudent).")
+    elif mc_type == "Student-T (Fat Tails)":
+        mc_df = st.number_input("Degrés de liberté (T-Student)", value=4.0, min_value=2.1, max_value=30.0, step=0.5, help="Entre 3 et 5 pour les marchés financiers. Plus c'est bas, plus les krachs sont fréquents.")
+    elif mc_type == "Bootstrap Historique":
+        st.caption("Sélectionne aléatoirement des journées réelles de l'historique. Idéal pour conserver la corrélation exacte entre les actifs. (Aucun paramètre requis).")
+
     if st.button("🚀 LANCER L'ANALYSE GLOBALE"):
         st.session_state.run_analysis = True
 
@@ -146,7 +158,7 @@ def plot_pie_chart(weights, labels, title):
     ax.set_title(title, color='white', fontsize=10, pad=10)
     return fig
 
-# --- DÉCLENCHEMENT DE L'ANALYSE AVEC SESSION STATE ---
+# --- DÉCLENCHEMENT DE L'ANALYSE ---
 if st.session_state.get('run_analysis', False):
     
     # --- PRÉPARATION DES DONNÉES ---
@@ -182,7 +194,6 @@ if st.session_state.get('run_analysis', False):
         rets_p = port_hist_filtered.pct_change().dropna()
         rets_bench = bench_hist_filtered.pct_change().dropna()
         
-        # Calculs KPIs Portefeuille ET Benchmark
         p_sharpe, p_sortino, p_calmar, p_ulcer, p_alpha, p_beta = calc_all_kpis(rets_p, rets_bench, rf_rate)
         bench_sharpe, bench_sortino, bench_calmar, bench_ulcer, _, _ = calc_all_kpis(rets_bench, rets_bench, rf_rate)
 
@@ -211,28 +222,60 @@ if st.session_state.get('run_analysis', False):
     st.divider()
 
     # --- SECTION : MONTE CARLO ---
-    st.header("Projection Monte Carlo & Robustesse")
+    st.header(f"Projection Monte Carlo ({mc_type})")
     
     n_sims_mc = 5000
     log_rets_port = np.log(df_port / df_port.shift(1)).dropna()
     vols_port = log_rets_port.std().values
+    means_port = log_rets_port.mean().values
+    
+    log_rets_bench = np.log(df_bench / df_bench.shift(1)).dropna()
+    vol_bench = log_rets_bench.std()
+    mean_bench = log_rets_bench.mean()
     
     price_paths = np.zeros((horizon, n_sims_mc, len(final_list)))
+    bench_paths = np.zeros((horizon, n_sims_mc))
+    
     temp_prices = np.tile(last_prices.values, (n_sims_mc, 1))
+    bench_temp = np.full(n_sims_mc, total_val_init)
+    
+    # Mise à l'échelle pour Student-T afin de respecter la volatilité historique
+    scaling_t = np.sqrt((mc_df - 2) / mc_df) if mc_df > 2 else 1.0
+
     for t in range(horizon):
-        temp_prices *= np.exp(np.random.normal(0, 1, (n_sims_mc, len(final_list))) * vols_port)
+        if mc_type == "Normale (GBM)":
+            drift = means_port if mc_drift else 0
+            drift_b = mean_bench if mc_drift else 0
+            
+            Z = np.random.normal(0, 1, (n_sims_mc, len(final_list)))
+            temp_prices *= np.exp(drift + Z * vols_port)
+            
+            Z_b = np.random.normal(0, 1, n_sims_mc)
+            bench_temp *= np.exp(drift_b + Z_b * vol_bench)
+            
+        elif mc_type == "Student-T (Fat Tails)":
+            Z = np.random.standard_t(df=mc_df, size=(n_sims_mc, len(final_list)))
+            temp_prices *= np.exp(Z * scaling_t * vols_port)
+            
+            Z_b = np.random.standard_t(df=mc_df, size=n_sims_mc)
+            bench_temp *= np.exp(Z_b * scaling_t * vol_bench)
+            
+        elif mc_type == "Bootstrap Historique":
+            # Sélection aléatoire de jours entiers dans l'historique
+            random_idx = np.random.randint(0, len(log_rets_port), size=n_sims_mc)
+            
+            drawn_rets = log_rets_port.iloc[random_idx].values
+            temp_prices *= np.exp(drawn_rets)
+            
+            drawn_rets_bench = log_rets_bench.iloc[random_idx].values
+            bench_temp *= np.exp(drawn_rets_bench)
+            
         price_paths[t] = temp_prices
+        bench_paths[t] = bench_temp
         
     portfolio_paths = np.sum(price_paths * [shares_dict[t] for t in final_list], axis=2)
     final_vals = portfolio_paths[-1, :]
     
-    bench_paths = np.zeros((horizon, n_sims_mc))
-    bench_temp = np.full(n_sims_mc, total_val_init)
-    vol_bench = np.log(df_bench / df_bench.shift(1)).std()
-    for t in range(horizon):
-        bench_temp *= np.exp(np.random.normal(0, 1, n_sims_mc) * vol_bench)
-        bench_paths[t] = bench_temp
-        
     p50 = portfolio_paths[:, np.argsort(final_vals)[int(n_sims_mc*0.5)]]
     p5 = portfolio_paths[:, np.argsort(final_vals)[int(n_sims_mc*0.05)]]
     p95 = portfolio_paths[:, np.argsort(final_vals)[int(n_sims_mc*0.95)]]
