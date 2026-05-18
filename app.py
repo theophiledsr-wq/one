@@ -11,23 +11,6 @@ st.set_page_config(page_title="European Portfolio Master Pro", layout="wide")
 hide_st_style = """<style>#MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;} .stDeployButton {display:none;}</style>"""
 st.markdown(hide_st_style, unsafe_allow_html=True)
 
-# --- BANDEAU MARCHÉ ---
-def display_animated_ticker():
-    indices = {"^FCHI": "CAC 40", "^GDAXI": "DAX 40", "^STOXX50E": "EURO 50", "^GSPC": "S&P 500", "BTC-USD": "BITCOIN", "GC=F": "OR"}
-    try:
-        ticker_data = yf.download(list(indices.keys()), period="5d", progress=False)['Close'].ffill()
-        ticker_items = ""
-        for ticker, name in indices.items():
-            series = ticker_data[ticker].dropna()
-            if len(series) >= 2:
-                current, prev = series.iloc[-1], series.iloc[-2]
-                var = ((current - prev) / prev) * 100
-                color, icon = ("#00ff00", "▲") if var >= 0 else ("#ff4b4b", "▼")
-                ticker_items += f"&nbsp;&nbsp;&nbsp;&nbsp; <b>{name}</b> {current:,.2f} <span style='color:{color};'>{icon} {var:+.2f}%</span> &nbsp;&nbsp;&nbsp;&nbsp; |"
-        st.markdown(f"""<style>@keyframes marquee {{ 0% {{ transform: translateX(0); }} 100% {{ transform: translateX(-50%); }} }} .ticker-wrap {{ width: 100%; overflow: hidden; background-color: #0e1117; padding: 12px 0; border-bottom: 2px solid #31333f; white-space: nowrap; }} .ticker-move {{ display: inline-block; white-space: nowrap; animation: marquee 100s linear infinite; font-family: sans-serif; font-size: 1.1rem; color: white; }}</style><div class="ticker-wrap"><div class="ticker-move">{(ticker_items * 3)}</div></div>""", unsafe_allow_html=True)
-    except: pass
-
-display_animated_ticker()
 st.title("PORTFOLIO MASTER PRO PREMIUM : L'outil de pilotage de portefeuille")
 
 def get_full_ticker_info(symbol):
@@ -42,85 +25,87 @@ def get_full_ticker_info(symbol):
     except: 
         return {"name": symbol, "logo": ""}
 
+# --- INITIALISATION DE LA MÉMOIRE (SESSION STATE) ---
+if 'portfolio_main' not in st.session_state:
+    st.session_state.portfolio_main = {
+        "MC.PA": {"name": "LVMH", "logo": "https://logo.clearbit.com/lvmh.com"},
+        "ASML": {"name": "ASML Holding", "logo": "https://logo.clearbit.com/asml.com"}
+    }
+if 'portfolio_bench' not in st.session_state:
+    st.session_state.portfolio_bench = {
+        "URTH": {"name": "iShares MSCI World", "logo": "https://logo.clearbit.com/ishares.com"}
+    }
+
+# --- FONCTION DE GESTION UI PORTFEUILLE ---
+def render_portfolio_editor(session_dict_name, prefix):
+    search_input = st.text_input(f"Ajouter Ticker (ex: AAPL, BTC-USD) :", key=f"add_{prefix}").upper()
+    if st.button("➕ Ajouter", key=f"btn_{prefix}"):
+        if search_input:
+            st.session_state[session_dict_name][search_input] = get_full_ticker_info(search_input)
+            st.rerun()
+
+    to_delete = []
+    for t, data in st.session_state[session_dict_name].items():
+        name = data.get("name", t)
+        logo = data.get("logo", "")
+        
+        c1, c2, c3 = st.columns([1, 4, 1])
+        if logo:
+            c1.markdown(f'<img src="{logo}" width="25" style="border-radius:50%;">', unsafe_allow_html=True)
+        else:
+            c1.write("📊")
+        c2.caption(f"**{t}** : {name}")
+        if c3.button("x", key=f"del_{prefix}_{t}"): to_delete.append(t)
+        
+    for t in to_delete: 
+        del st.session_state[session_dict_name][t]
+        st.rerun()
+
+    final_list = list(st.session_state[session_dict_name].keys())
+    shares_dict = {}
+    if not final_list: 
+        st.info("Ajoutez des actifs pour commencer.")
+    else:
+        st.divider()
+        for t in final_list:
+            shares_dict[t] = st.number_input(f"Quantité {t}", value=10, min_value=1, key=f"qty_{prefix}_{t}")
+    return final_list, shares_dict
+
 # --- SIDEBAR ---
 with st.sidebar:
-    st.header("🛒 Portefeuille")
+    st.header("🛒 Portefeuilles")
     
-    if 'portfolio' not in st.session_state or (st.session_state.portfolio and isinstance(list(st.session_state.portfolio.values())[0], str)): 
-        st.session_state.portfolio = {}
+    tab_main, tab_bench = st.tabs(["💼 Principal", "⚖️ Benchmark"])
     
-    search_input = st.text_input("Ajouter Ticker (ex: MC.PA, ASML, BTC-USD) :").upper()
-    if st.button("➕ Ajouter"):
-        if search_input:
-            st.session_state.portfolio[search_input] = get_full_ticker_info(search_input)
-            st.rerun()
+    with tab_main:
+        st.subheader("Portfolio à tester")
+        list_main, shares_main = render_portfolio_editor('portfolio_main', 'main')
+        
+    with tab_bench:
+        st.subheader("Portfolio de référence")
+        list_bench, shares_bench = render_portfolio_editor('portfolio_bench', 'bench')
 
-    if st.session_state.portfolio:
-        to_delete = []
-        for t, data in st.session_state.portfolio.items():
-            name = data.get("name", t)
-            logo = data.get("logo", "")
-            
-            c1, c2, c3 = st.columns([1, 4, 1])
-            if logo:
-                c1.markdown(f'<img src="{logo}" width="25" style="border-radius:50%;">', unsafe_allow_html=True)
-            else:
-                c1.write("📊")
-            c2.caption(f"**{t}** : {name}")
-            if c3.button("x", key=f"del_{t}"): to_delete.append(t)
-            
-        for t in to_delete: 
-            del st.session_state.portfolio[t]
-            st.rerun()
+    if not list_main or not list_bench:
+        st.warning("Veuillez remplir les deux portefeuilles.")
+        st.stop()
 
-    final_list = list(st.session_state.portfolio.keys())
-    if not final_list: st.info("Ajoutez des actifs pour commencer."); st.stop()
-    
     st.divider()
-    shares_dict = {t: st.number_input(f"Quantité {t}", value=10, min_value=1) for t in final_list}
-    
     st.subheader("⚙️ Paramètres Globaux")
-    
-    benchmarks_dict = {
-        "S&P 500": "^GSPC",
-        "MSCI World (ETF)": "URTH",
-        "CAC 40": "^FCHI"
-    }
-    bench_name = st.radio("Sélectionner le Benchmark :", list(benchmarks_dict.keys()))
-    bench_ticker = benchmarks_dict[bench_name]
-
     start_date = st.date_input("Historique de référence :", datetime.date(2021, 1, 1))
     horizon = st.number_input("Horizon de projection (jours)", value=252)
     rf_rate = st.number_input("Taux sans risque %", value=3.0) / 100
     n_portfolios = st.number_input("Simulations Frontière", value=5000, min_value=1000, step=1000)
-    
-    st.divider()
-    
-    # --- CHOIX MONTE CARLO ---
-    st.subheader("🎲 Modèle Monte Carlo")
-    mc_type = st.radio("Type de simulation :", ["Normale (GBM)", "Student-T (Fat Tails)", "Bootstrap Historique"])
-    
-    # Variables pour stocker les paramètres spécifiques
-    mc_drift = False
-    mc_df = 4.0
-    
-    if mc_type == "Normale (GBM)":
-        mc_drift = st.checkbox("Inclure le Drift historique", value=False, help="Si coché, la simulation prolonge la tendance moyenne historique. Si décoché, l'espérance de rendement est de 0 (plus prudent).")
-    elif mc_type == "Student-T (Fat Tails)":
-        mc_df = st.number_input("Degrés de liberté (T-Student)", value=4.0, min_value=2.1, max_value=30.0, step=0.5, help="Entre 3 et 5 pour les marchés financiers. Plus c'est bas, plus les krachs sont fréquents.")
-    elif mc_type == "Bootstrap Historique":
-        st.caption("Sélectionne aléatoirement des journées réelles de l'historique. Idéal pour conserver la corrélation exacte entre les actifs. (Aucun paramètre requis).")
 
     if st.button("🚀 LANCER L'ANALYSE GLOBALE"):
         st.session_state.run_analysis = True
 
 # --- CHARGEMENT DES DONNÉES ---
 @st.cache_data
-def load_data_all(tickers, benchmark):
-    all_t = list(set(tickers + [benchmark]))
+def load_data_all(tickers_main, tickers_bench):
+    all_t = list(set(tickers_main + tickers_bench + ["^GSPC"])) # GSPC = S&P 500 obligatoire
     return yf.download(all_t, start="2015-01-01", progress=False)['Close'].ffill().dropna()
 
-raw_data = load_data_all(final_list, bench_ticker)
+raw_data = load_data_all(list_main, list_bench)
 
 # --- FONCTIONS KPI ---
 def calc_all_kpis(port_rets, bench_rets, rf_rate):
@@ -163,159 +148,154 @@ if st.session_state.get('run_analysis', False):
     
     # --- PRÉPARATION DES DONNÉES ---
     df = raw_data[raw_data.index >= pd.Timestamp(start_date)]
-    df_port = df[final_list]
-    df_bench = df[bench_ticker]
+    df_main = df[list_main]
+    df_bench_port = df[list_bench]
+    df_sp500 = df["^GSPC"]
     
-    last_prices = df_port.iloc[-1]
-    total_val_init = sum(last_prices[t] * shares_dict[t] for t in final_list)
+    last_prices_main = df_main.iloc[-1]
+    total_val_init = sum(last_prices_main[t] * shares_main[t] for t in list_main)
 
-    port_hist_val = (df_port * [shares_dict[t] for t in final_list]).sum(axis=1)
-    bench_hist_val = (df_bench / df_bench.iloc[0]) * port_hist_val.iloc[0]
+    # Valorisation historique des 3 entités
+    port_main_hist_val = (df_main * [shares_main[t] for t in list_main]).sum(axis=1)
+    port_bench_raw_val = (df_bench_port * [shares_bench[t] for t in list_bench]).sum(axis=1)
+    
+    # Base 100 réajustée sur le capital initial du portfeuille principal pour comparaison
+    port_bench_hist_val = (port_bench_raw_val / port_bench_raw_val.iloc[0]) * total_val_init
+    sp500_hist_val = (df_sp500 / df_sp500.iloc[0]) * total_val_init
 
     # --- SECTION : DONNÉES HISTORIQUES ---
-    st.header("Analyse Historique & Performance")
+    st.header("Analyse Historique & Superposition")
     col_graph, col_controls = st.columns([3, 1])
     
     with col_controls:
         st.subheader("Période d'analyse")
         period_choice = st.radio("Sélectionnez l'horizon :", ["1 Mois", "3 Mois", "6 Mois", "1 An", "Depuis l'origine"], index=4)
         
-        end_d = port_hist_val.index[-1]
+        end_d = port_main_hist_val.index[-1]
         if period_choice == "1 Mois": start_d = end_d - relativedelta(months=1)
         elif period_choice == "3 Mois": start_d = end_d - relativedelta(months=3)
         elif period_choice == "6 Mois": start_d = end_d - relativedelta(months=6)
         elif period_choice == "1 An": start_d = end_d - relativedelta(years=1)
-        else: start_d = port_hist_val.index[0]
+        else: start_d = port_main_hist_val.index[0]
         
-        mask = (port_hist_val.index >= start_d)
-        port_hist_filtered = port_hist_val[mask]
-        bench_hist_filtered = (df_bench[mask] / df_bench[mask].iloc[0]) * port_hist_filtered.iloc[0]
+        mask = (port_main_hist_val.index >= start_d)
+        
+        p_main_filtered = port_main_hist_val[mask]
+        p_bench_filtered = (port_bench_hist_val[mask] / port_bench_hist_val[mask].iloc[0]) * p_main_filtered.iloc[0]
+        sp500_filtered = (sp500_hist_val[mask] / sp500_hist_val[mask].iloc[0]) * p_main_filtered.iloc[0]
 
-        rets_p = port_hist_filtered.pct_change().dropna()
-        rets_bench = bench_hist_filtered.pct_change().dropna()
+        rets_main = p_main_filtered.pct_change().dropna()
+        rets_bench = p_bench_filtered.pct_change().dropna()
+        rets_sp500 = sp500_filtered.pct_change().dropna()
         
-        p_sharpe, p_sortino, p_calmar, p_ulcer, p_alpha, p_beta = calc_all_kpis(rets_p, rets_bench, rf_rate)
-        bench_sharpe, bench_sortino, bench_calmar, bench_ulcer, _, _ = calc_all_kpis(rets_bench, rets_bench, rf_rate)
+        m_sharpe, m_sortino, m_calmar, m_ulcer, m_alpha, m_beta = calc_all_kpis(rets_main, rets_sp500, rf_rate)
+        b_sharpe, b_sortino, b_calmar, b_ulcer, b_alpha, b_beta = calc_all_kpis(rets_bench, rets_sp500, rf_rate)
+        sp_sharpe, sp_sortino, sp_calmar, sp_ulcer, _, _ = calc_all_kpis(rets_sp500, rets_sp500, rf_rate)
 
     with col_graph:
         fig_hist, ax_hist = plt.subplots(figsize=(10, 4), facecolor='none')
         ax_hist.set_facecolor('none')
-        ax_hist.plot(port_hist_filtered.index, port_hist_filtered, color='#00ff00', label='Portefeuille')
-        ax_hist.plot(bench_hist_filtered.index, bench_hist_filtered, color='orange', ls='--', label=f'{bench_name} (Base)')
+        ax_hist.plot(p_main_filtered.index, p_main_filtered, color='#00ff00', lw=2, label='Portfolio Principal')
+        ax_hist.plot(p_bench_filtered.index, p_bench_filtered, color='#00bfff', lw=2, label='Portfolio Benchmark')
+        ax_hist.plot(sp500_filtered.index, sp500_filtered, color='orange', ls='--', lw=1.5, label='S&P 500 (Base)')
         ax_hist.set_ylabel("Valeur (€)", color='white')
         ax_hist.legend(frameon=False, labelcolor='white')
         ax_hist.grid(alpha=0.2)
         ax_hist.tick_params(colors='white')
         st.pyplot(fig_hist, transparent=True)
 
-    st.subheader("Comparatif des Risques & Surperformance")
+    st.subheader("Comparatif des Risques & Performance (vs S&P 500)")
     kpi_df = pd.DataFrame({
-        "Alpha (Surperf.)": [f"{p_alpha*100:+.2f}%", "0.00%"],
-        "Beta (Volatilité Rel.)": [f"{p_beta:.2f}", "1.00"],
-        "Sharpe Ratio": [f"{p_sharpe:.2f}", f"{bench_sharpe:.2f}"],
-        "Sortino Ratio": [f"{p_sortino:.2f}", f"{bench_sortino:.2f}"],
-        "Calmar Ratio": [f"{p_calmar:.2f}", f"{bench_calmar:.2f}"],
-        "Ulcer Index": [f"{p_ulcer:.2f}%", f"{bench_ulcer:.2f}%"]
-    }, index=["Portefeuille", bench_name])
+        "Alpha (Surperf. S&P500)": [f"{m_alpha*100:+.2f}%", f"{b_alpha*100:+.2f}%", "0.00%"],
+        "Beta (Volatilité Rel.)": [f"{m_beta:.2f}", f"{b_beta:.2f}", "1.00"],
+        "Sharpe Ratio": [f"{m_sharpe:.2f}", f"{b_sharpe:.2f}", f"{sp_sharpe:.2f}"],
+        "Sortino Ratio": [f"{m_sortino:.2f}", f"{b_sortino:.2f}", f"{sp_sortino:.2f}"],
+        "Calmar Ratio": [f"{m_calmar:.2f}", f"{b_calmar:.2f}", f"{sp_calmar:.2f}"],
+        "Ulcer Index": [f"{m_ulcer:.2f}%", f"{b_ulcer:.2f}%", f"{sp_ulcer:.2f}%"]
+    }, index=["Portfolio Principal", "Portfolio Benchmark", "S&P 500"])
     st.table(kpi_df)
 
     st.divider()
 
-    # --- SECTION : MONTE CARLO ---
-    st.header(f"Projection Monte Carlo ({mc_type})")
+    # --- SECTION : MONTE CARLO (3 MODÈLES SUPERPOSÉS) ---
+    st.header(f"Projection Monte Carlo des 3 Modèles (Portfolio Principal)")
     
     n_sims_mc = 5000
-    log_rets_port = np.log(df_port / df_port.shift(1)).dropna()
-    vols_port = log_rets_port.std().values
-    means_port = log_rets_port.mean().values
-    
-    log_rets_bench = np.log(df_bench / df_bench.shift(1)).dropna()
-    vol_bench = log_rets_bench.std()
-    mean_bench = log_rets_bench.mean()
-    
-    price_paths = np.zeros((horizon, n_sims_mc, len(final_list)))
-    bench_paths = np.zeros((horizon, n_sims_mc))
-    
-    temp_prices = np.tile(last_prices.values, (n_sims_mc, 1))
-    bench_temp = np.full(n_sims_mc, total_val_init)
-    
-    # Mise à l'échelle pour Student-T afin de respecter la volatilité historique
-    scaling_t = np.sqrt((mc_df - 2) / mc_df) if mc_df > 2 else 1.0
+    log_rets_main = np.log(df_main / df_main.shift(1)).dropna()
+    vols_main = log_rets_main.std().values
+    means_main = log_rets_main.mean().values
 
-    for t in range(horizon):
-        if mc_type == "Normale (GBM)":
-            drift = means_port if mc_drift else 0
-            drift_b = mean_bench if mc_drift else 0
+    def run_simulation(mc_type, mc_df=4.0):
+        temp_prices = np.tile(last_prices_main.values, (n_sims_mc, 1))
+        price_paths = np.zeros((horizon, n_sims_mc, len(list_main)))
+        scaling_t = np.sqrt((mc_df - 2) / mc_df) if mc_df > 2 else 1.0
+
+        for t in range(horizon):
+            if mc_type == "Normale":
+                Z = np.random.normal(0, 1, (n_sims_mc, len(list_main)))
+                temp_prices *= np.exp(means_main + Z * vols_main)
+            elif mc_type == "Student":
+                Z = np.random.standard_t(df=mc_df, size=(n_sims_mc, len(list_main)))
+                temp_prices *= np.exp(Z * scaling_t * vols_main)
+            elif mc_type == "Bootstrap":
+                random_idx = np.random.randint(0, len(log_rets_main), size=n_sims_mc)
+                drawn_rets = log_rets_main.iloc[random_idx].values
+                temp_prices *= np.exp(drawn_rets)
+            price_paths[t] = temp_prices
             
-            Z = np.random.normal(0, 1, (n_sims_mc, len(final_list)))
-            temp_prices *= np.exp(drift + Z * vols_port)
-            
-            Z_b = np.random.normal(0, 1, n_sims_mc)
-            bench_temp *= np.exp(drift_b + Z_b * vol_bench)
-            
-        elif mc_type == "Student-T (Fat Tails)":
-            Z = np.random.standard_t(df=mc_df, size=(n_sims_mc, len(final_list)))
-            temp_prices *= np.exp(Z * scaling_t * vols_port)
-            
-            Z_b = np.random.standard_t(df=mc_df, size=n_sims_mc)
-            bench_temp *= np.exp(Z_b * scaling_t * vol_bench)
-            
-        elif mc_type == "Bootstrap Historique":
-            # Sélection aléatoire de jours entiers dans l'historique
-            random_idx = np.random.randint(0, len(log_rets_port), size=n_sims_mc)
-            
-            drawn_rets = log_rets_port.iloc[random_idx].values
-            temp_prices *= np.exp(drawn_rets)
-            
-            drawn_rets_bench = log_rets_bench.iloc[random_idx].values
-            bench_temp *= np.exp(drawn_rets_bench)
-            
-        price_paths[t] = temp_prices
-        bench_paths[t] = bench_temp
-        
-    portfolio_paths = np.sum(price_paths * [shares_dict[t] for t in final_list], axis=2)
-    final_vals = portfolio_paths[-1, :]
+        return np.sum(price_paths * [shares_main[tk] for tk in list_main], axis=2)
+
+    # Lancement des 3 simulations
+    paths_norm = run_simulation("Normale")
+    paths_stud = run_simulation("Student")
+    paths_boot = run_simulation("Bootstrap")
+
+    # Extractions des médianes et bornes de risque (basé sur le Bootstrap, plus réaliste)
+    def get_median_path(paths):
+        return paths[:, np.argsort(paths[-1, :])[int(n_sims_mc*0.5)]]
     
-    p50 = portfolio_paths[:, np.argsort(final_vals)[int(n_sims_mc*0.5)]]
-    p5 = portfolio_paths[:, np.argsort(final_vals)[int(n_sims_mc*0.05)]]
-    p95 = portfolio_paths[:, np.argsort(final_vals)[int(n_sims_mc*0.95)]]
-    bench_p50 = bench_paths[:, np.argsort(bench_paths[-1, :])[int(n_sims_mc*0.5)]]
+    p50_norm = get_median_path(paths_norm)
+    p50_stud = get_median_path(paths_stud)
+    p50_boot = get_median_path(paths_boot)
     
-    proba_gain = (final_vals > total_val_init).mean() * 100
-    proba_loss_10 = (final_vals < total_val_init * 0.9).mean() * 100
-    var_95 = total_val_init - np.percentile(final_vals, 5)
-    cvar_95 = total_val_init - np.mean(final_vals[final_vals <= np.percentile(final_vals, 5)])
+    p5_boot = paths_boot[:, np.argsort(paths_boot[-1, :])[int(n_sims_mc*0.05)]]
+    p95_boot = paths_boot[:, np.argsort(paths_boot[-1, :])[int(n_sims_mc*0.95)]]
+    
+    final_vals_boot = paths_boot[-1, :]
+    proba_gain = (final_vals_boot > total_val_init).mean() * 100
+    var_95 = total_val_init - np.percentile(final_vals_boot, 5)
+    cvar_95 = total_val_init - np.mean(final_vals_boot[final_vals_boot <= np.percentile(final_vals_boot, 5)])
     
     col1, col2 = st.columns([2, 1])
     with col1:
         fig1, ax1 = plt.subplots(figsize=(10, 5), facecolor='none')
         ax1.set_facecolor('none')
-        ax1.plot(p95, color='#00ff00', label='Optimiste (95%)', alpha=0.6)
-        ax1.plot(p50, color='white', lw=3, label='Médian Portefeuille')
-        ax1.plot(bench_p50, color='orange', lw=2, ls='--', label=f'Médian {bench_name}')
-        ax1.plot(p5, color='#ff4b4b', label='Pessimiste (5%)', alpha=0.6)
-        ax1.fill_between(range(horizon), p5, p95, color='gray', alpha=0.1)
+        ax1.plot(p50_norm, color='cyan', lw=2, label='Médiane Normale (GBM)')
+        ax1.plot(p50_stud, color='magenta', lw=2, label='Médiane Student-T (Fat Tails)')
+        ax1.plot(p50_boot, color='#00ff00', lw=3, label='Médiane Bootstrap Historique')
+        
+        # Bandes de risques uniquement pour le bootstrap pour garder le graphe lisible
+        ax1.fill_between(range(horizon), p5_boot, p95_boot, color='gray', alpha=0.15, label="Zone de Risque 90% (Bootstrap)")
+        
         ax1.legend(frameon=False, labelcolor='white')
         ax1.tick_params(colors='white')
         st.pyplot(fig1, transparent=True)
     
     with col2:
-        st.metric("Valeur Médiane Attendue", f"{p50[-1]:,.0f} €")
+        st.write("**Métriques calculées sur modèle Bootstrap :**")
+        st.metric("Valeur Médiane Attendue", f"{p50_boot[-1]:,.0f} €")
         st.metric("Probabilité de Plus-Value", f"{proba_gain:.1f} %")
-        st.metric("Proba. de perte > 10%", f"{proba_loss_10:.1f} %", help="Risque de perdre plus de 10% du capital.")
         st.metric("Value at Risk (95%)", f"- {var_95:,.0f} €", help="Perte au centile 5%.")
-        st.metric("CVaR (Expected Shortfall 95%)", f"- {cvar_95:,.0f} €", help="Moyenne des pertes dans les 5% des pires scénarios.")
+        st.metric("CVaR (Expected Shortfall 95%)", f"- {cvar_95:,.0f} €", help="Moyenne des pertes extrêmes.")
 
     st.divider()
 
-    # --- SECTION : FRONTIÈRE EFFICIENTE VECTORISÉE ---
-    st.header(f"Optimisation de la Frontière Efficiente ({n_portfolios} itérations)")
+    # --- SECTION : FRONTIÈRE EFFICIENTE VECTORISÉE (PORTFOLIO PRINCIPAL) ---
+    st.header(f"Optimisation de la Frontière Efficiente ({n_portfolios} itérations - Principal)")
     
-    rets_daily_assets = df_port.pct_change().dropna()
-    
+    rets_daily_assets = df_main.pct_change().dropna()
     np.random.seed(42)
-    w_matrix = np.random.dirichlet(np.ones(len(final_list)), n_portfolios).T
-    
+    w_matrix = np.random.dirichlet(np.ones(len(list_main)), n_portfolios).T
     port_rets_matrix = rets_daily_assets.values @ w_matrix
     
     ann_rets_arr = np.mean(port_rets_matrix, axis=0) * 252
@@ -340,7 +320,7 @@ if st.session_state.get('run_analysis', False):
     idx_cagr = np.argmax(cagrs_arr)
     idx_ulcer = np.argmin(ulcers_arr)
     
-    weights_curr = np.array([shares_dict[t] * last_prices[t] for t in final_list])
+    weights_curr = np.array([shares_main[t] * last_prices_main[t] for t in list_main])
     weights_curr /= np.sum(weights_curr)
     curr_ret = np.sum(rets_daily_assets.mean() * 252 * weights_curr)
     curr_vol = np.sqrt(np.dot(weights_curr.T, np.dot(rets_daily_assets.cov() * 252, weights_curr)))
@@ -363,13 +343,13 @@ if st.session_state.get('run_analysis', False):
     st.subheader("Répartitions Optimales Suggérées")
     c_pie1, c_pie2, c_pie3, c_pie4, c_pie5 = st.columns(5)
     
-    with c_pie1: st.pyplot(plot_pie_chart(weights_curr, final_list, "Actuel"), transparent=True)
-    with c_pie2: st.pyplot(plot_pie_chart(w_matrix[:, idx_sharpe], final_list, "Max Sharpe\n(Rendement/Risque)"), transparent=True)
-    with c_pie3: st.pyplot(plot_pie_chart(w_matrix[:, idx_sortino], final_list, "Max Sortino\n(Risque Baisse)"), transparent=True)
-    with c_pie4: st.pyplot(plot_pie_chart(w_matrix[:, idx_cagr], final_list, "Max CAGR\n(Croissance)"), transparent=True)
-    with c_pie5: st.pyplot(plot_pie_chart(w_matrix[:, idx_ulcer], final_list, "Min Ulcer\n(Sommeil tranquille)"), transparent=True)
+    with c_pie1: st.pyplot(plot_pie_chart(weights_curr, list_main, "Actuel"), transparent=True)
+    with c_pie2: st.pyplot(plot_pie_chart(w_matrix[:, idx_sharpe], list_main, "Max Sharpe\n(Rendement/Risque)"), transparent=True)
+    with c_pie3: st.pyplot(plot_pie_chart(w_matrix[:, idx_sortino], list_main, "Max Sortino\n(Risque Baisse)"), transparent=True)
+    with c_pie4: st.pyplot(plot_pie_chart(w_matrix[:, idx_cagr], list_main, "Max CAGR\n(Croissance)"), transparent=True)
+    with c_pie5: st.pyplot(plot_pie_chart(w_matrix[:, idx_ulcer], list_main, "Min Ulcer\n(Sommeil tranquille)"), transparent=True)
 
-    # --- NOUVEAU : Tableau multi-profils direct (Parts et Poids) ---
+    # --- Tableau multi-profils direct (Parts et Poids) ---
     st.subheader("Plans d'Action Multi-Stratégies")
     
     profiles = {
@@ -383,16 +363,16 @@ if st.session_state.get('run_analysis', False):
     
     with c_tab1:
         st.markdown("**Allocation en Nombre de Parts**")
-        shares_df = pd.DataFrame(index=final_list)
-        shares_df["Parts Actuelles"] = [shares_dict[t] for t in final_list]
+        shares_df = pd.DataFrame(index=list_main)
+        shares_df["Parts Actuelles"] = [shares_main[t] for t in list_main]
         for p_name, p_idx in profiles.items():
             target_val = w_matrix[:, p_idx] * total_val_init
-            shares_df[f"{p_name}"] = np.round(target_val / last_prices.values).astype(int)
+            shares_df[f"{p_name}"] = np.round(target_val / last_prices_main.values).astype(int)
         st.dataframe(shares_df, use_container_width=True)
 
     with c_tab2:
         st.markdown("**Pondération du Portefeuille (%)**")
-        weights_df = pd.DataFrame(index=final_list)
+        weights_df = pd.DataFrame(index=list_main)
         weights_df["Actuel (%)"] = (weights_curr * 100).round(1)
         for p_name, p_idx in profiles.items():
             weights_df[f"{p_name} (%)"] = (w_matrix[:, p_idx] * 100).round(1)
