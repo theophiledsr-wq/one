@@ -153,22 +153,25 @@ if st.session_state.get('run_analysis', False):
     df_sp500 = df["^GSPC"]
     
     last_prices_main = df_main.iloc[-1]
-    total_val_init = sum(last_prices_main[t] * shares_main[t] for t in list_main)
+    total_val_init_main = sum(last_prices_main[t] * shares_main[t] for t in list_main)
+    
+    last_prices_bench = df_bench_port.iloc[-1]
+    total_val_init_bench = sum(last_prices_bench[t] * shares_bench[t] for t in list_bench)
 
     # Valorisation historique des 3 entités
     port_main_hist_val = (df_main * [shares_main[t] for t in list_main]).sum(axis=1)
     port_bench_raw_val = (df_bench_port * [shares_bench[t] for t in list_bench]).sum(axis=1)
     
     # Base 100 réajustée sur le capital initial du portfeuille principal pour comparaison
-    port_bench_hist_val = (port_bench_raw_val / port_bench_raw_val.iloc[0]) * total_val_init
-    sp500_hist_val = (df_sp500 / df_sp500.iloc[0]) * total_val_init
+    port_bench_hist_val = (port_bench_raw_val / port_bench_raw_val.iloc[0]) * total_val_init_main
+    sp500_hist_val = (df_sp500 / df_sp500.iloc[0]) * total_val_init_main
 
     # --- SECTION : DONNÉES HISTORIQUES ---
     st.header("Analyse Historique & Superposition")
     col_graph, col_controls = st.columns([3, 1])
     
     with col_controls:
-        st.subheader("Période d'analyse")
+        st.subheader("Contrôles & Alpha")
         period_choice = st.radio("Sélectionnez l'horizon :", ["1 Mois", "3 Mois", "6 Mois", "1 An", "Depuis l'origine"], index=4)
         
         end_d = port_main_hist_val.index[-1]
@@ -191,9 +194,13 @@ if st.session_state.get('run_analysis', False):
         m_sharpe, m_sortino, m_calmar, m_ulcer, m_alpha, m_beta = calc_all_kpis(rets_main, rets_sp500, rf_rate)
         b_sharpe, b_sortino, b_calmar, b_ulcer, b_alpha, b_beta = calc_all_kpis(rets_bench, rets_sp500, rf_rate)
         sp_sharpe, sp_sortino, sp_calmar, sp_ulcer, _, _ = calc_all_kpis(rets_sp500, rets_sp500, rf_rate)
+        
+        st.divider()
+        st.metric("Alpha Principal vs S&P500", f"{m_alpha*100:+.2f} %", help="Surperformance annualisée par rapport au S&P 500 pour le risque pris.")
+        st.metric("Alpha Benchmark vs S&P500", f"{b_alpha*100:+.2f} %", help="Surperformance annualisée par rapport au S&P 500 pour le risque pris.")
 
     with col_graph:
-        fig_hist, ax_hist = plt.subplots(figsize=(10, 4), facecolor='none')
+        fig_hist, ax_hist = plt.subplots(figsize=(10, 5), facecolor='none')
         ax_hist.set_facecolor('none')
         ax_hist.plot(p_main_filtered.index, p_main_filtered, color='#00ff00', lw=2, label='Portfolio Principal')
         ax_hist.plot(p_bench_filtered.index, p_bench_filtered, color='#00bfff', lw=2, label='Portfolio Benchmark')
@@ -206,7 +213,6 @@ if st.session_state.get('run_analysis', False):
 
     st.subheader("Comparatif des Risques & Performance (vs S&P 500)")
     kpi_df = pd.DataFrame({
-        "Alpha (Surperf. S&P500)": [f"{m_alpha*100:+.2f}%", f"{b_alpha*100:+.2f}%", "0.00%"],
         "Beta (Volatilité Rel.)": [f"{m_beta:.2f}", f"{b_beta:.2f}", "1.00"],
         "Sharpe Ratio": [f"{m_sharpe:.2f}", f"{b_sharpe:.2f}", f"{sp_sharpe:.2f}"],
         "Sortino Ratio": [f"{m_sortino:.2f}", f"{b_sortino:.2f}", f"{sp_sortino:.2f}"],
@@ -250,7 +256,7 @@ if st.session_state.get('run_analysis', False):
     paths_stud = run_simulation("Student")
     paths_boot = run_simulation("Bootstrap")
 
-    # Extractions des médianes et bornes de risque (basé sur le Bootstrap, plus réaliste)
+    # Extractions des médianes et bornes de risque
     def get_median_path(paths):
         return paths[:, np.argsort(paths[-1, :])[int(n_sims_mc*0.5)]]
     
@@ -262,11 +268,16 @@ if st.session_state.get('run_analysis', False):
     p95_boot = paths_boot[:, np.argsort(paths_boot[-1, :])[int(n_sims_mc*0.95)]]
     
     final_vals_boot = paths_boot[-1, :]
-    proba_gain = (final_vals_boot > total_val_init).mean() * 100
-    var_95 = total_val_init - np.percentile(final_vals_boot, 5)
-    cvar_95 = total_val_init - np.mean(final_vals_boot[final_vals_boot <= np.percentile(final_vals_boot, 5)])
+    proba_gain = (final_vals_boot > total_val_init_main).mean() * 100
+    var_95 = total_val_init_main - np.percentile(final_vals_boot, 5)
+    cvar_95 = total_val_init_main - np.mean(final_vals_boot[final_vals_boot <= np.percentile(final_vals_boot, 5)])
+
+    # Calcul des performances en %
+    perf_norm_pct = (p50_norm[-1] / total_val_init_main - 1) * 100
+    perf_stud_pct = (p50_stud[-1] / total_val_init_main - 1) * 100
+    perf_boot_pct = (p50_boot[-1] / total_val_init_main - 1) * 100
     
-    col1, col2 = st.columns([2, 1])
+    col1, col2 = st.columns([3, 1])
     with col1:
         fig1, ax1 = plt.subplots(figsize=(10, 5), facecolor='none')
         ax1.set_facecolor('none')
@@ -280,100 +291,144 @@ if st.session_state.get('run_analysis', False):
         ax1.legend(frameon=False, labelcolor='white')
         ax1.tick_params(colors='white')
         st.pyplot(fig1, transparent=True)
+        
+        # Affichage des perfs en % sous le graphique
+        c_perf1, c_perf2, c_perf3 = st.columns(3)
+        c_perf1.metric("Perf. Attendue (Normale)", f"{perf_norm_pct:+.2f} %")
+        c_perf2.metric("Perf. Attendue (Student)", f"{perf_stud_pct:+.2f} %")
+        c_perf3.metric("Perf. Attendue (Bootstrap)", f"{perf_boot_pct:+.2f} %")
     
     with col2:
-        st.write("**Métriques calculées sur modèle Bootstrap :**")
+        st.write("**Métriques Risque (Modèle Bootstrap) :**")
         st.metric("Valeur Médiane Attendue", f"{p50_boot[-1]:,.0f} €")
         st.metric("Probabilité de Plus-Value", f"{proba_gain:.1f} %")
-        st.metric("Value at Risk (95%)", f"- {var_95:,.0f} €", help="Perte au centile 5%.")
-        st.metric("CVaR (Expected Shortfall 95%)", f"- {cvar_95:,.0f} €", help="Moyenne des pertes extrêmes.")
+        st.metric("Value at Risk (95%)", f"- {var_95:,.0f} €")
+        st.metric("CVaR (Expected Shortfall 95%)", f"- {cvar_95:,.0f} €")
 
     st.divider()
 
-    # --- SECTION : FRONTIÈRE EFFICIENTE VECTORISÉE (PORTFOLIO PRINCIPAL) ---
-    st.header(f"Optimisation de la Frontière Efficiente ({n_portfolios} itérations - Principal)")
+    # --- SECTION : FRONTIÈRE EFFICIENTE MODULAIRE ---
+    st.header(f"Optimisation de la Frontière Efficiente ({n_portfolios} itérations)")
     
-    rets_daily_assets = df_main.pct_change().dropna()
-    np.random.seed(42)
-    w_matrix = np.random.dirichlet(np.ones(len(list_main)), n_portfolios).T
-    port_rets_matrix = rets_daily_assets.values @ w_matrix
-    
-    ann_rets_arr = np.mean(port_rets_matrix, axis=0) * 252
-    ann_vols_arr = np.std(port_rets_matrix, axis=0) * np.sqrt(252)
-    sharpes_arr = (ann_rets_arr - rf_rate) / ann_vols_arr
-    
-    downside_rets = np.minimum(port_rets_matrix, 0)
-    down_vols_arr = np.std(downside_rets, axis=0) * np.sqrt(252)
-    sortinos_arr = np.divide((ann_rets_arr - rf_rate), down_vols_arr, out=np.zeros_like(ann_rets_arr), where=down_vols_arr!=0)
-    
-    cum_rets_matrix = np.cumprod(1 + port_rets_matrix, axis=0)
-    running_max_matrix = np.maximum.accumulate(cum_rets_matrix, axis=0)
-    dds_matrix = (cum_rets_matrix - running_max_matrix) / running_max_matrix
-    max_dds_arr = np.abs(np.min(dds_matrix, axis=0))
-    
-    calmars_arr = np.divide(ann_rets_arr, max_dds_arr, out=np.zeros_like(ann_rets_arr), where=max_dds_arr!=0)
-    ulcers_arr = np.sqrt(np.mean(dds_matrix**2, axis=0)) * 100
-    cagrs_arr = (cum_rets_matrix[-1, :] ** (252 / len(port_rets_matrix))) - 1
-    
-    idx_sharpe = np.argmax(sharpes_arr)
-    idx_sortino = np.argmax(sortinos_arr)
-    idx_cagr = np.argmax(cagrs_arr)
-    idx_ulcer = np.argmin(ulcers_arr)
-    
-    weights_curr = np.array([shares_main[t] * last_prices_main[t] for t in list_main])
-    weights_curr /= np.sum(weights_curr)
-    curr_ret = np.sum(rets_daily_assets.mean() * 252 * weights_curr)
-    curr_vol = np.sqrt(np.dot(weights_curr.T, np.dot(rets_daily_assets.cov() * 252, weights_curr)))
+    def generate_efficient_frontier(df_assets, list_assets, shares_assets, total_val, title):
+        rets_daily = df_assets.pct_change().dropna()
+        np.random.seed(42)
+        w_matrix = np.random.dirichlet(np.ones(len(list_assets)), n_portfolios).T
+        port_rets_matrix = rets_daily.values @ w_matrix
+        
+        ann_rets_arr = np.mean(port_rets_matrix, axis=0) * 252
+        ann_vols_arr = np.std(port_rets_matrix, axis=0) * np.sqrt(252)
+        sharpes_arr = (ann_rets_arr - rf_rate) / ann_vols_arr
+        
+        downside_rets = np.minimum(port_rets_matrix, 0)
+        down_vols_arr = np.std(downside_rets, axis=0) * np.sqrt(252)
+        sortinos_arr = np.divide((ann_rets_arr - rf_rate), down_vols_arr, out=np.zeros_like(ann_rets_arr), where=down_vols_arr!=0)
+        
+        cum_rets_matrix = np.cumprod(1 + port_rets_matrix, axis=0)
+        running_max_matrix = np.maximum.accumulate(cum_rets_matrix, axis=0)
+        dds_matrix = (cum_rets_matrix - running_max_matrix) / running_max_matrix
+        max_dds_arr = np.abs(np.min(dds_matrix, axis=0))
+        
+        calmars_arr = np.divide(ann_rets_arr, max_dds_arr, out=np.zeros_like(ann_rets_arr), where=max_dds_arr!=0)
+        ulcers_arr = np.sqrt(np.mean(dds_matrix**2, axis=0)) * 100
+        cagrs_arr = (cum_rets_matrix[-1, :] ** (252 / len(port_rets_matrix))) - 1
+        
+        idx_sharpe = np.argmax(sharpes_arr)
+        idx_sortino = np.argmax(sortinos_arr)
+        idx_cagr = np.argmax(cagrs_arr)
+        idx_ulcer = np.argmin(ulcers_arr)
+        
+        last_prices = df_assets.iloc[-1]
+        weights_curr = np.array([shares_assets[t] * last_prices[t] for t in list_assets])
+        weights_curr /= np.sum(weights_curr)
+        curr_ret = np.sum(rets_daily.mean() * 252 * weights_curr)
+        curr_vol = np.sqrt(np.dot(weights_curr.T, np.dot(rets_daily.cov() * 252, weights_curr)))
 
-    fig2, ax2 = plt.subplots(figsize=(10, 4), facecolor='none')
-    ax2.set_facecolor('none')
-    scatter = ax2.scatter(ann_vols_arr, ann_rets_arr, c=sharpes_arr, cmap='viridis', s=5, alpha=0.3)
-    ax2.scatter(curr_vol, curr_ret, marker='D', color='white', s=100, label='Actuel', edgecolors='black')
-    ax2.scatter(ann_vols_arr[idx_sharpe], ann_rets_arr[idx_sharpe], marker='*', color='red', s=150, label='Max Sharpe')
-    ax2.scatter(ann_vols_arr[idx_sortino], ann_rets_arr[idx_sortino], marker='^', color='orange', s=100, label='Max Sortino')
-    ax2.scatter(ann_vols_arr[idx_cagr], ann_rets_arr[idx_cagr], marker='P', color='cyan', s=100, label='Max CAGR')
-    ax2.scatter(ann_vols_arr[idx_ulcer], ann_rets_arr[idx_ulcer], marker='v', color='magenta', s=100, label='Min Ulcer (Sécurité)')
-    ax2.set_xlabel("Volatilité (Risque)", color='white')
-    ax2.set_ylabel("Rendement Attendu", color='white')
-    ax2.tick_params(colors='white')
-    ax2.legend(frameon=False, labelcolor='white', bbox_to_anchor=(1.05, 1), loc='upper left')
-    st.pyplot(fig2, transparent=True)
+        fig, ax = plt.subplots(figsize=(10, 4), facecolor='none')
+        ax.set_facecolor('none')
+        scatter = ax.scatter(ann_vols_arr, ann_rets_arr, c=sharpes_arr, cmap='viridis', s=5, alpha=0.3)
+        ax.scatter(curr_vol, curr_ret, marker='D', color='white', s=100, label='Actuel', edgecolors='black')
+        ax.scatter(ann_vols_arr[idx_sharpe], ann_rets_arr[idx_sharpe], marker='*', color='red', s=150, label='Max Sharpe')
+        ax.scatter(ann_vols_arr[idx_sortino], ann_rets_arr[idx_sortino], marker='^', color='orange', s=100, label='Max Sortino')
+        ax.scatter(ann_vols_arr[idx_cagr], ann_rets_arr[idx_cagr], marker='P', color='cyan', s=100, label='Max CAGR')
+        ax.scatter(ann_vols_arr[idx_ulcer], ann_rets_arr[idx_ulcer], marker='v', color='magenta', s=100, label='Min Ulcer (Sécurité)')
+        ax.set_xlabel("Volatilité (Risque)", color='white')
+        ax.set_ylabel("Rendement Attendu", color='white')
+        ax.set_title(title, color='white')
+        ax.tick_params(colors='white')
+        ax.legend(frameon=False, labelcolor='white', bbox_to_anchor=(1.05, 1), loc='upper left')
+        
+        profiles = {"Max Sharpe": idx_sharpe, "Max Sortino": idx_sortino, "Max CAGR": idx_cagr, "Min Ulcer": idx_ulcer}
+        
+        return fig, profiles, w_matrix, weights_curr, last_prices
 
-    # --- Répartition Camemberts ---
-    st.subheader("Répartitions Optimales Suggérées")
-    c_pie1, c_pie2, c_pie3, c_pie4, c_pie5 = st.columns(5)
-    
-    with c_pie1: st.pyplot(plot_pie_chart(weights_curr, list_main, "Actuel"), transparent=True)
-    with c_pie2: st.pyplot(plot_pie_chart(w_matrix[:, idx_sharpe], list_main, "Max Sharpe\n(Rendement/Risque)"), transparent=True)
-    with c_pie3: st.pyplot(plot_pie_chart(w_matrix[:, idx_sortino], list_main, "Max Sortino\n(Risque Baisse)"), transparent=True)
-    with c_pie4: st.pyplot(plot_pie_chart(w_matrix[:, idx_cagr], list_main, "Max CAGR\n(Croissance)"), transparent=True)
-    with c_pie5: st.pyplot(plot_pie_chart(w_matrix[:, idx_ulcer], list_main, "Min Ulcer\n(Sommeil tranquille)"), transparent=True)
+    tab_ef_main, tab_ef_bench = st.tabs(["📊 Frontière Portefeuille Principal", "📊 Frontière Benchmark"])
 
-    # --- Tableau multi-profils direct (Parts et Poids) ---
-    st.subheader("Plans d'Action Multi-Stratégies")
-    
-    profiles = {
-        "Max Sharpe": idx_sharpe, 
-        "Max Sortino": idx_sortino, 
-        "Max CAGR": idx_cagr, 
-        "Min Ulcer": idx_ulcer
-    }
+    # --- Sous-section : Principal ---
+    with tab_ef_main:
+        fig_main, profs_main, w_mat_main, w_curr_main, lp_main = generate_efficient_frontier(
+            df_main, list_main, shares_main, total_val_init_main, "Frontière Efficiente - Principal"
+        )
+        st.pyplot(fig_main, transparent=True)
+        
+        st.markdown("#### Répartitions Optimales (Principal)")
+        c_pie1, c_pie2, c_pie3, c_pie4, c_pie5 = st.columns(5)
+        with c_pie1: st.pyplot(plot_pie_chart(w_curr_main, list_main, "Actuel"), transparent=True)
+        with c_pie2: st.pyplot(plot_pie_chart(w_mat_main[:, profs_main["Max Sharpe"]], list_main, "Max Sharpe"), transparent=True)
+        with c_pie3: st.pyplot(plot_pie_chart(w_mat_main[:, profs_main["Max Sortino"]], list_main, "Max Sortino"), transparent=True)
+        with c_pie4: st.pyplot(plot_pie_chart(w_mat_main[:, profs_main["Max CAGR"]], list_main, "Max CAGR"), transparent=True)
+        with c_pie5: st.pyplot(plot_pie_chart(w_mat_main[:, profs_main["Min Ulcer"]], list_main, "Min Ulcer"), transparent=True)
 
-    c_tab1, c_tab2 = st.columns(2)
-    
-    with c_tab1:
-        st.markdown("**Allocation en Nombre de Parts**")
-        shares_df = pd.DataFrame(index=list_main)
-        shares_df["Parts Actuelles"] = [shares_main[t] for t in list_main]
-        for p_name, p_idx in profiles.items():
-            target_val = w_matrix[:, p_idx] * total_val_init
-            shares_df[f"{p_name}"] = np.round(target_val / last_prices_main.values).astype(int)
-        st.dataframe(shares_df, use_container_width=True)
+        c_tab1, c_tab2 = st.columns(2)
+        with c_tab1:
+            st.markdown("**Allocation en Nombre de Parts (Principal)**")
+            shares_df = pd.DataFrame(index=list_main)
+            shares_df["Parts Actuelles"] = [shares_main[t] for t in list_main]
+            for p_name, p_idx in profs_main.items():
+                target_val = w_mat_main[:, p_idx] * total_val_init_main
+                shares_df[f"{p_name}"] = np.round(target_val / lp_main.values).astype(int)
+            st.dataframe(shares_df, use_container_width=True)
 
-    with c_tab2:
-        st.markdown("**Pondération du Portefeuille (%)**")
-        weights_df = pd.DataFrame(index=list_main)
-        weights_df["Actuel (%)"] = (weights_curr * 100).round(1)
-        for p_name, p_idx in profiles.items():
-            weights_df[f"{p_name} (%)"] = (w_matrix[:, p_idx] * 100).round(1)
-        st.dataframe(weights_df, use_container_width=True)
+        with c_tab2:
+            st.markdown("**Pondération du Portefeuille (%) (Principal)**")
+            weights_df = pd.DataFrame(index=list_main)
+            weights_df["Actuel (%)"] = (w_curr_main * 100).round(1)
+            for p_name, p_idx in profs_main.items():
+                weights_df[f"{p_name} (%)"] = (w_mat_main[:, p_idx] * 100).round(1)
+            st.dataframe(weights_df, use_container_width=True)
+
+    # --- Sous-section : Benchmark ---
+    with tab_ef_bench:
+        if len(list_bench) > 1:
+            fig_bench, profs_bench, w_mat_bench, w_curr_bench, lp_bench = generate_efficient_frontier(
+                df_bench_port, list_bench, shares_bench, total_val_init_bench, "Frontière Efficiente - Benchmark"
+            )
+            st.pyplot(fig_bench, transparent=True)
+            
+            st.markdown("#### Répartitions Optimales (Benchmark)")
+            c_pie1_b, c_pie2_b, c_pie3_b, c_pie4_b, c_pie5_b = st.columns(5)
+            with c_pie1_b: st.pyplot(plot_pie_chart(w_curr_bench, list_bench, "Actuel"), transparent=True)
+            with c_pie2_b: st.pyplot(plot_pie_chart(w_mat_bench[:, profs_bench["Max Sharpe"]], list_bench, "Max Sharpe"), transparent=True)
+            with c_pie3_b: st.pyplot(plot_pie_chart(w_mat_bench[:, profs_bench["Max Sortino"]], list_bench, "Max Sortino"), transparent=True)
+            with c_pie4_b: st.pyplot(plot_pie_chart(w_mat_bench[:, profs_bench["Max CAGR"]], list_bench, "Max CAGR"), transparent=True)
+            with c_pie5_b: st.pyplot(plot_pie_chart(w_mat_bench[:, profs_bench["Min Ulcer"]], list_bench, "Min Ulcer"), transparent=True)
+
+            c_tab1_b, c_tab2_b = st.columns(2)
+            with c_tab1_b:
+                st.markdown("**Allocation en Nombre de Parts (Benchmark)**")
+                shares_df_b = pd.DataFrame(index=list_bench)
+                shares_df_b["Parts Actuelles"] = [shares_bench[t] for t in list_bench]
+                for p_name, p_idx in profs_bench.items():
+                    target_val = w_mat_bench[:, p_idx] * total_val_init_bench
+                    shares_df_b[f"{p_name}"] = np.round(target_val / lp_bench.values).astype(int)
+                st.dataframe(shares_df_b, use_container_width=True)
+
+            with c_tab2_b:
+                st.markdown("**Pondération du Portefeuille (%) (Benchmark)**")
+                weights_df_b = pd.DataFrame(index=list_bench)
+                weights_df_b["Actuel (%)"] = (w_curr_bench * 100).round(1)
+                for p_name, p_idx in profs_bench.items():
+                    weights_df_b[f"{p_name} (%)"] = (w_mat_bench[:, p_idx] * 100).round(1)
+                st.dataframe(weights_df_b, use_container_width=True)
+        else:
+            st.info("Le portefeuille Benchmark doit contenir au moins 2 actifs pour générer une frontière efficiente.")
