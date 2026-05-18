@@ -162,7 +162,7 @@ if st.session_state.get('run_analysis', False):
     port_main_hist_val = (df_main * [shares_main[t] for t in list_main]).sum(axis=1)
     port_bench_raw_val = (df_bench_port * [shares_bench[t] for t in list_bench]).sum(axis=1)
     
-    # Base 100 réajustée sur le capital initial du portfeuille principal pour comparaison
+    # Base 100 réajustée sur le capital initial du portefeuille principal pour comparaison
     port_bench_hist_val = (port_bench_raw_val / port_bench_raw_val.iloc[0]) * total_val_init_main
     sp500_hist_val = (df_sp500 / df_sp500.iloc[0]) * total_val_init_main
 
@@ -223,87 +223,107 @@ if st.session_state.get('run_analysis', False):
 
     st.divider()
 
-    # --- SECTION : MONTE CARLO (3 MODÈLES SUPERPOSÉS) ---
-    st.header(f"Projection Monte Carlo des 3 Modèles (Portfolio Principal)")
+    # --- SECTION : MONTE CARLO (MÉTHODE MODULAIRE) ---
+    st.header(f"Projection Monte Carlo des 3 Modèles")
     
     n_sims_mc = 5000
-    log_rets_main = np.log(df_main / df_main.shift(1)).dropna()
-    vols_main = log_rets_main.std().values
-    means_main = log_rets_main.mean().values
 
-    def run_simulation(mc_type, mc_df=4.0):
-        temp_prices = np.tile(last_prices_main.values, (n_sims_mc, 1))
-        price_paths = np.zeros((horizon, n_sims_mc, len(list_main)))
-        scaling_t = np.sqrt((mc_df - 2) / mc_df) if mc_df > 2 else 1.0
+    def run_monte_carlo_simulation(df_assets, list_assets, last_prices, shares_assets, total_val_init, mc_df=4.0):
+        log_rets = np.log(df_assets / df_assets.shift(1)).dropna()
+        vols = log_rets.std().values
+        means = log_rets.mean().values
 
-        for t in range(horizon):
-            if mc_type == "Normale":
-                Z = np.random.normal(0, 1, (n_sims_mc, len(list_main)))
-                temp_prices *= np.exp(means_main + Z * vols_main)
-            elif mc_type == "Student":
-                Z = np.random.standard_t(df=mc_df, size=(n_sims_mc, len(list_main)))
-                temp_prices *= np.exp(Z * scaling_t * vols_main)
-            elif mc_type == "Bootstrap":
-                random_idx = np.random.randint(0, len(log_rets_main), size=n_sims_mc)
-                drawn_rets = log_rets_main.iloc[random_idx].values
-                temp_prices *= np.exp(drawn_rets)
-            price_paths[t] = temp_prices
-            
-        return np.sum(price_paths * [shares_main[tk] for tk in list_main], axis=2)
+        def sim_path(mc_type):
+            temp_prices = np.tile(last_prices.values, (n_sims_mc, 1))
+            price_paths = np.zeros((horizon, n_sims_mc, len(list_assets)))
+            scaling_t = np.sqrt((mc_df - 2) / mc_df) if mc_df > 2 else 1.0
 
-    # Lancement des 3 simulations
-    paths_norm = run_simulation("Normale")
-    paths_stud = run_simulation("Student")
-    paths_boot = run_simulation("Bootstrap")
+            for t in range(horizon):
+                if mc_type == "Normale":
+                    Z = np.random.normal(0, 1, (n_sims_mc, len(list_assets)))
+                    temp_prices *= np.exp(means + Z * vols)
+                elif mc_type == "Student":
+                    Z = np.random.standard_t(df=mc_df, size=(n_sims_mc, len(list_assets)))
+                    temp_prices *= np.exp(Z * scaling_t * vols)
+                elif mc_type == "Bootstrap":
+                    random_idx = np.random.randint(0, len(log_rets), size=n_sims_mc)
+                    drawn_rets = log_rets.iloc[random_idx].values
+                    temp_prices *= np.exp(drawn_rets)
+                price_paths[t] = temp_prices
+                
+            return np.sum(price_paths * [shares_assets[tk] for tk in list_assets], axis=2)
 
-    # Extractions des médianes et bornes de risque
-    def get_median_path(paths):
-        return paths[:, np.argsort(paths[-1, :])[int(n_sims_mc*0.5)]]
-    
-    p50_norm = get_median_path(paths_norm)
-    p50_stud = get_median_path(paths_stud)
-    p50_boot = get_median_path(paths_boot)
-    
-    p5_boot = paths_boot[:, np.argsort(paths_boot[-1, :])[int(n_sims_mc*0.05)]]
-    p95_boot = paths_boot[:, np.argsort(paths_boot[-1, :])[int(n_sims_mc*0.95)]]
-    
-    final_vals_boot = paths_boot[-1, :]
-    proba_gain = (final_vals_boot > total_val_init_main).mean() * 100
-    var_95 = total_val_init_main - np.percentile(final_vals_boot, 5)
-    cvar_95 = total_val_init_main - np.mean(final_vals_boot[final_vals_boot <= np.percentile(final_vals_boot, 5)])
+        paths_norm = sim_path("Normale")
+        paths_stud = sim_path("Student")
+        paths_boot = sim_path("Bootstrap")
 
-    # Calcul des performances en %
-    perf_norm_pct = (p50_norm[-1] / total_val_init_main - 1) * 100
-    perf_stud_pct = (p50_stud[-1] / total_val_init_main - 1) * 100
-    perf_boot_pct = (p50_boot[-1] / total_val_init_main - 1) * 100
-    
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        fig1, ax1 = plt.subplots(figsize=(10, 5), facecolor='none')
-        ax1.set_facecolor('none')
-        ax1.plot(p50_norm, color='cyan', lw=2, label='Médiane Normale (GBM)')
-        ax1.plot(p50_stud, color='magenta', lw=2, label='Médiane Student-T (Fat Tails)')
-        ax1.plot(p50_boot, color='#00ff00', lw=3, label='Médiane Bootstrap Historique')
+        def get_median_path(paths):
+            return paths[:, np.argsort(paths[-1, :])[int(n_sims_mc*0.5)]]
         
-        # Bandes de risques uniquement pour le bootstrap pour garder le graphe lisible
-        ax1.fill_between(range(horizon), p5_boot, p95_boot, color='gray', alpha=0.15, label="Zone de Risque 90% (Bootstrap)")
+        p50_norm = get_median_path(paths_norm)
+        p50_stud = get_median_path(paths_stud)
+        p50_boot = get_median_path(paths_boot)
         
-        ax1.legend(frameon=False, labelcolor='white')
-        ax1.tick_params(colors='white')
-        st.pyplot(fig1, transparent=True)
+        p5_boot = paths_boot[:, np.argsort(paths_boot[-1, :])[int(n_sims_mc*0.05)]]
+        p95_boot = paths_boot[:, np.argsort(paths_boot[-1, :])[int(n_sims_mc*0.95)]]
         
-        # Affichage des perfs en % sous le graphique
-        c_perf1, c_perf2, c_perf3 = st.columns(3)
-        c_perf1.metric("Perf. Attendue (Normale)", f"{perf_norm_pct:+.2f} %")
-        c_perf2.metric("Perf. Attendue (Student)", f"{perf_stud_pct:+.2f} %")
-        c_perf3.metric("Perf. Attendue (Bootstrap)", f"{perf_boot_pct:+.2f} %")
-    
-    with col2:
-        st.write("**Métriques Risque (Modèle Bootstrap) :**")
-        st.metric("Valeur Médiane Attendue", f"{p50_boot[-1]:,.0f} €")
-        st.metric("Probabilité de Plus-Value", f"{proba_gain:.1f} %")
-        st.metric("Value at Risk (95%)", f"- {var_95:,.0f} €")
-        st.metric("CVaR (Expected Shortfall 95%)", f"- {cvar_95:,.0f} €")
+        final_vals_boot = paths_boot[-1, :]
+        proba_gain = (final_vals_boot > total_val_init).mean() * 100
+        var_95 = total_val_init - np.percentile(final_vals_boot, 5)
+        cvar_95 = total_val_init - np.mean(final_vals_boot[final_vals_boot <= np.percentile(final_vals_boot, 5)])
+
+        perf_norm_pct = (p50_norm[-1] / total_val_init - 1) * 100
+        perf_stud_pct = (p50_stud[-1] / total_val_init - 1) * 100
+        perf_boot_pct = (p50_boot[-1] / total_val_init - 1) * 100
+
+        fig, ax = plt.subplots(figsize=(10, 5), facecolor='none')
+        ax.set_facecolor('none')
+        ax.plot(p50_norm, color='cyan', lw=2, label='Médiane Normale (GBM)')
+        ax.plot(p50_stud, color='magenta', lw=2, label='Médiane Student-T (Fat Tails)')
+        ax.plot(p50_boot, color='#00ff00', lw=3, label='Médiane Bootstrap Historique')
+        ax.fill_between(range(horizon), p5_boot, p95_boot, color='gray', alpha=0.15, label="Zone de Risque 90% (Bootstrap)")
+        ax.legend(frameon=False, labelcolor='white')
+        ax.tick_params(colors='white')
+        
+        return fig, p50_boot[-1], proba_gain, var_95, cvar_95, perf_norm_pct, perf_stud_pct, perf_boot_pct
+
+    tab_mc_main, tab_mc_bench = st.tabs(["💼 Simulations Principal", "⚖️ Simulations Benchmark"])
+
+    with tab_mc_main:
+        fig_m_main, med_b_m, prob_m, var_m, cvar_m, pn_m, ps_m, pb_m = run_monte_carlo_simulation(
+            df_main, list_main, last_prices_main, shares_main, total_val_init_main
+        )
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.pyplot(fig_m_main, transparent=True)
+            c_perf1, c_perf2, c_perf3 = st.columns(3)
+            c_perf1.metric("Perf. Attendue (Normale)", f"{pn_m:+.2f} %")
+            c_perf2.metric("Perf. Attendue (Student)", f"{ps_m:+.2f} %")
+            c_perf3.metric("Perf. Attendue (Bootstrap)", f"{pb_m:+.2f} %")
+        with col2:
+            st.write("**Métriques Risque (Bootstrap - Principal) :**")
+            st.metric("Valeur Médiane Attendue", f"{med_b_m:,.0f} €")
+            st.metric("Probabilité de Plus-Value", f"{prob_m:.1f} %")
+            st.metric("Value at Risk (95%)", f"- {var_m:,.0f} €")
+            st.metric("CVaR (Expected Shortfall 95%)", f"- {cvar_m:,.0f} €")
+
+    with tab_mc_bench:
+        fig_m_bench, med_b_b, prob_b, var_b, cvar_b, pn_b, ps_b, pb_b = run_monte_carlo_simulation(
+            df_bench_port, list_bench, last_prices_bench, shares_bench, total_val_init_bench
+        )
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.pyplot(fig_m_bench, transparent=True)
+            c_perf1, c_perf2, c_perf3 = st.columns(3)
+            c_perf1.metric("Perf. Attendue (Normale)", f"{pn_b:+.2f} %")
+            c_perf2.metric("Perf. Attendue (Student)", f"{ps_b:+.2f} %")
+            c_perf3.metric("Perf. Attendue (Bootstrap)", f"{pb_b:+.2f} %")
+        with col2:
+            st.write("**Métriques Risque (Bootstrap - Benchmark) :**")
+            st.metric("Valeur Médiane Attendue", f"{med_b_b:,.0f} €")
+            st.metric("Probabilité de Plus-Value", f"{prob_b:.1f} %")
+            st.metric("Value at Risk (95%)", f"- {var_b:,.0f} €")
+            st.metric("CVaR (Expected Shortfall 95%)", f"- {cvar_b:,.0f} €")
 
     st.divider()
 
