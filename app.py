@@ -158,11 +158,9 @@ if st.session_state.get('run_analysis', False):
     last_prices_bench = df_bench_port.iloc[-1]
     total_val_init_bench = sum(last_prices_bench[t] * shares_bench[t] for t in list_bench)
 
-    # Valorisation historique des 3 entités
+    # Valorisation historique
     port_main_hist_val = (df_main * [shares_main[t] for t in list_main]).sum(axis=1)
     port_bench_raw_val = (df_bench_port * [shares_bench[t] for t in list_bench]).sum(axis=1)
-    
-    # Base 100 réajustée sur le capital initial du portefeuille principal pour comparaison
     port_bench_hist_val = (port_bench_raw_val / port_bench_raw_val.iloc[0]) * total_val_init_main
     sp500_hist_val = (df_sp500 / df_sp500.iloc[0]) * total_val_init_main
 
@@ -196,8 +194,8 @@ if st.session_state.get('run_analysis', False):
         sp_sharpe, sp_sortino, sp_calmar, sp_ulcer, _, _ = calc_all_kpis(rets_sp500, rets_sp500, rf_rate)
         
         st.divider()
-        st.metric("Alpha Principal vs S&P500", f"{m_alpha*100:+.2f} %", help="Surperformance annualisée par rapport au S&P 500 pour le risque pris.")
-        st.metric("Alpha Benchmark vs S&P500", f"{b_alpha*100:+.2f} %", help="Surperformance annualisée par rapport au S&P 500 pour le risque pris.")
+        st.metric("Alpha Principal vs S&P500", f"{m_alpha*100:+.2f} %")
+        st.metric("Alpha Benchmark vs S&P500", f"{b_alpha*100:+.2f} %")
 
     with col_graph:
         fig_hist, ax_hist = plt.subplots(figsize=(10, 5), facecolor='none')
@@ -223,12 +221,33 @@ if st.session_state.get('run_analysis', False):
 
     st.divider()
 
-    # --- SECTION : MONTE CARLO (MÉTHODE MODULAIRE) ---
-    st.header(f"Projection Monte Carlo des 3 Modèles")
+    # --- SECTION : MONTE CARLO ---
+    st.header(f"Projection Monte Carlo des Modèles (4 Variantes)")
+    
+    with st.expander("📚 Voir les formules mathématiques des modèles de volatilité", expanded=False):
+        st.markdown(r"""
+        **1. Mouvement Brownien Géométrique (Loi Normale)**
+        Simule un chemin basé sur la volatilité historique moyenne.
+        $$ S_t = S_{t-1} \exp\left( \mu + \sigma Z \right), \quad Z \sim \mathcal{N}(0,1) $$
+        
+        **2. Distribution de Student-T (Fat Tails)**
+        Modélise une plus grande probabilité de chocs extrêmes (krachs) en utilisant des queues épaisses. $\nu$ correspond aux degrés de liberté.
+        $$ S_t = S_{t-1} \exp\left( \mu + \sigma \sqrt{\frac{\nu-2}{\nu}} Z \right), \quad Z \sim t(\nu) $$
+        
+        **3. Bootstrap Historique**
+        Tire aléatoirement (avec remise) dans les rendements passés réels. Ne suppose aucune distribution théorique.
+        $$ S_t = S_{t-1} \exp(R_{i}), \quad R_i \sim \text{Uniforme}(\{R_1, R_2, \dots, R_T\}) $$
+        
+        **4. Modèle GARCH(1,1) (Volatilité Stochastique)**
+        Capture l'effet de "clustering" de volatilité (les chocs entraînent des périodes de forte volatilité).
+        $$ \sigma_t^2 = \omega + \alpha \epsilon_{t-1}^2 + \beta \sigma_{t-1}^2 $$
+        $$ S_t = S_{t-1} \exp(\mu + \sigma_t Z), \quad \epsilon_t = \sigma_t Z, \quad Z \sim \mathcal{N}(0,1) $$
+        *Note : $\omega$ est ajusté par ciblage de variance $V(1-\alpha-\beta)$.*
+        """)
     
     n_sims_mc = 5000
 
-    def run_monte_carlo_simulation(df_assets, list_assets, last_prices, shares_assets, total_val_init, mc_df=4.0):
+    def run_monte_carlo_simulation(df_assets, list_assets, last_prices, shares_assets, total_val_init, mc_df, garch_a, garch_b):
         log_rets = np.log(df_assets / df_assets.shift(1)).dropna()
         vols = log_rets.std().values
         means = log_rets.mean().values
@@ -236,33 +255,49 @@ if st.session_state.get('run_analysis', False):
         def sim_path(mc_type):
             temp_prices = np.tile(last_prices.values, (n_sims_mc, 1))
             price_paths = np.zeros((horizon, n_sims_mc, len(list_assets)))
-            scaling_t = np.sqrt((mc_df - 2) / mc_df) if mc_df > 2 else 1.0
-
-            for t in range(horizon):
-                if mc_type == "Normale":
+            
+            if mc_type == "GARCH":
+                V = vols**2
+                omega = V * (1.0 - garch_a - garch_b)
+                current_var = np.tile(V, (n_sims_mc, 1))
+                
+                for t in range(horizon):
                     Z = np.random.normal(0, 1, (n_sims_mc, len(list_assets)))
-                    temp_prices *= np.exp(means + Z * vols)
-                elif mc_type == "Student":
-                    Z = np.random.standard_t(df=mc_df, size=(n_sims_mc, len(list_assets)))
-                    temp_prices *= np.exp(Z * scaling_t * vols)
-                elif mc_type == "Bootstrap":
-                    random_idx = np.random.randint(0, len(log_rets), size=n_sims_mc)
-                    drawn_rets = log_rets.iloc[random_idx].values
-                    temp_prices *= np.exp(drawn_rets)
-                price_paths[t] = temp_prices
+                    current_sigma = np.sqrt(np.maximum(current_var, 1e-8)) # Protection bornes
+                    temp_prices *= np.exp(means + current_sigma * Z)
+                    price_paths[t] = temp_prices
+                    
+                    epsilon = current_sigma * Z
+                    current_var = omega + garch_a * (epsilon**2) + garch_b * current_var
+                    
+            else:
+                scaling_t = np.sqrt((mc_df - 2) / mc_df) if mc_df > 2 else 1.0
+                for t in range(horizon):
+                    if mc_type == "Normale":
+                        Z = np.random.normal(0, 1, (n_sims_mc, len(list_assets)))
+                        temp_prices *= np.exp(means + Z * vols)
+                    elif mc_type == "Student":
+                        Z = np.random.standard_t(df=mc_df, size=(n_sims_mc, len(list_assets)))
+                        temp_prices *= np.exp(Z * scaling_t * vols)
+                    elif mc_type == "Bootstrap":
+                        random_idx = np.random.randint(0, len(log_rets), size=n_sims_mc)
+                        drawn_rets = log_rets.iloc[random_idx].values
+                        temp_prices *= np.exp(drawn_rets)
+                    price_paths[t] = temp_prices
                 
             return np.sum(price_paths * [shares_assets[tk] for tk in list_assets], axis=2)
 
         paths_norm = sim_path("Normale")
         paths_stud = sim_path("Student")
         paths_boot = sim_path("Bootstrap")
+        paths_garch = sim_path("GARCH")
 
-        def get_median_path(paths):
-            return paths[:, np.argsort(paths[-1, :])[int(n_sims_mc*0.5)]]
+        def get_median_path(paths): return paths[:, np.argsort(paths[-1, :])[int(n_sims_mc*0.5)]]
         
         p50_norm = get_median_path(paths_norm)
         p50_stud = get_median_path(paths_stud)
         p50_boot = get_median_path(paths_boot)
+        p50_garch = get_median_path(paths_garch)
         
         p5_boot = paths_boot[:, np.argsort(paths_boot[-1, :])[int(n_sims_mc*0.05)]]
         p95_boot = paths_boot[:, np.argsort(paths_boot[-1, :])[int(n_sims_mc*0.95)]]
@@ -275,62 +310,91 @@ if st.session_state.get('run_analysis', False):
         perf_norm_pct = (p50_norm[-1] / total_val_init - 1) * 100
         perf_stud_pct = (p50_stud[-1] / total_val_init - 1) * 100
         perf_boot_pct = (p50_boot[-1] / total_val_init - 1) * 100
+        perf_garch_pct = (p50_garch[-1] / total_val_init - 1) * 100
 
         fig, ax = plt.subplots(figsize=(10, 5), facecolor='none')
         ax.set_facecolor('none')
-        ax.plot(p50_norm, color='cyan', lw=2, label='Médiane Normale (GBM)')
-        ax.plot(p50_stud, color='magenta', lw=2, label='Médiane Student-T (Fat Tails)')
-        ax.plot(p50_boot, color='#00ff00', lw=3, label='Médiane Bootstrap Historique')
+        ax.plot(p50_norm, color='cyan', lw=1.5, alpha=0.8, label='Médiane Normale (GBM)')
+        ax.plot(p50_stud, color='magenta', lw=1.5, alpha=0.8, label='Médiane Student-T')
+        ax.plot(p50_garch, color='orange', lw=2, label='Médiane GARCH(1,1)')
+        ax.plot(p50_boot, color='#00ff00', lw=3, label='Médiane Bootstrap (Réf)')
         ax.fill_between(range(horizon), p5_boot, p95_boot, color='gray', alpha=0.15, label="Zone de Risque 90% (Bootstrap)")
         ax.legend(frameon=False, labelcolor='white')
         ax.tick_params(colors='white')
         
-        return fig, p50_boot[-1], proba_gain, var_95, cvar_95, perf_norm_pct, perf_stud_pct, perf_boot_pct
+        return fig, p50_boot[-1], proba_gain, var_95, cvar_95, perf_norm_pct, perf_stud_pct, perf_boot_pct, perf_garch_pct
 
     tab_mc_main, tab_mc_bench = st.tabs(["💼 Simulations Principal", "⚖️ Simulations Benchmark"])
 
+    # --- SOUS-SECTION : MONTE CARLO PRINCIPAL ---
     with tab_mc_main:
-        fig_m_main, med_b_m, prob_m, var_m, cvar_m, pn_m, ps_m, pb_m = run_monte_carlo_simulation(
-            df_main, list_main, last_prices_main, shares_main, total_val_init_main
-        )
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.pyplot(fig_m_main, transparent=True)
-            c_perf1, c_perf2, c_perf3 = st.columns(3)
-            c_perf1.metric("Perf. Attendue (Normale)", f"{pn_m:+.2f} %")
-            c_perf2.metric("Perf. Attendue (Student)", f"{ps_m:+.2f} %")
-            c_perf3.metric("Perf. Attendue (Bootstrap)", f"{pb_m:+.2f} %")
-        with col2:
-            st.write("**Métriques Risque (Bootstrap - Principal) :**")
-            st.metric("Valeur Médiane Attendue", f"{med_b_m:,.0f} €")
-            st.metric("Probabilité de Plus-Value", f"{prob_m:.1f} %")
-            st.metric("Value at Risk (95%)", f"- {var_m:,.0f} €")
-            st.metric("CVaR (Expected Shortfall 95%)", f"- {cvar_m:,.0f} €")
+        col_graph_m, col_params_m = st.columns([3, 1])
+        with col_params_m:
+            st.markdown("#### ⚙️ Paramètres Modèles")
+            df_val_m = st.slider("Degrés de liberté (Student T)", min_value=2.1, max_value=20.0, value=4.0, step=0.1, key="df_m", help="Un petit nombre augmente les queues épaisses (krachs).")
+            garch_alpha_m = st.slider("GARCH α (Impact Chocs)", min_value=0.01, max_value=0.30, value=0.10, step=0.01, key="ga_m")
+            garch_beta_m = st.slider("GARCH β (Mémoire)", min_value=0.50, max_value=0.98, value=0.85, step=0.01, key="gb_m")
+            if garch_alpha_m + garch_beta_m >= 1:
+                st.warning("α + β doit être < 1. Ajustement automatique de β appliqué.")
+                garch_beta_m = 0.99 - garch_alpha_m
 
-    with tab_mc_bench:
-        fig_m_bench, med_b_b, prob_b, var_b, cvar_b, pn_b, ps_b, pb_b = run_monte_carlo_simulation(
-            df_bench_port, list_bench, last_prices_bench, shares_bench, total_val_init_bench
+        fig_m_main, med_b_m, prob_m, var_m, cvar_m, pn_m, ps_m, pb_m, pg_m = run_monte_carlo_simulation(
+            df_main, list_main, last_prices_main, shares_main, total_val_init_main, df_val_m, garch_alpha_m, garch_beta_m
         )
-        col1, col2 = st.columns([3, 1])
-        with col1:
+        
+        with col_graph_m:
+            st.pyplot(fig_m_main, transparent=True)
+            c_p1, c_p2, c_p3, c_p4 = st.columns(4)
+            c_p1.metric("Perf Normale", f"{pn_m:+.2f} %")
+            c_p2.metric("Perf Student", f"{ps_m:+.2f} %")
+            c_p3.metric("Perf Bootstrap", f"{pb_m:+.2f} %")
+            c_p4.metric("Perf GARCH", f"{pg_m:+.2f} %")
+            
+        with col_params_m:
+            st.divider()
+            st.markdown("**Métriques Risque (Bootstrap) :**")
+            st.metric("Valeur Médiane Attendue", f"{med_b_m:,.0f} €")
+            st.metric("Probabilité Plus-Value", f"{prob_m:.1f} %")
+            st.metric("Value at Risk (95%)", f"- {var_m:,.0f} €")
+            st.metric("CVaR (Expected Shortfall)", f"- {cvar_m:,.0f} €")
+
+    # --- SOUS-SECTION : MONTE CARLO BENCHMARK ---
+    with tab_mc_bench:
+        col_graph_b, col_params_b = st.columns([3, 1])
+        with col_params_b:
+            st.markdown("#### ⚙️ Paramètres Modèles")
+            df_val_b = st.slider("Degrés de liberté (Student T)", min_value=2.1, max_value=20.0, value=4.0, step=0.1, key="df_b")
+            garch_alpha_b = st.slider("GARCH α (Impact Chocs)", min_value=0.01, max_value=0.30, value=0.10, step=0.01, key="ga_b")
+            garch_beta_b = st.slider("GARCH β (Mémoire)", min_value=0.50, max_value=0.98, value=0.85, step=0.01, key="gb_b")
+            if garch_alpha_b + garch_beta_b >= 1:
+                st.warning("α + β doit être < 1. Ajustement automatique de β appliqué.")
+                garch_beta_b = 0.99 - garch_alpha_b
+
+        fig_m_bench, med_b_b, prob_b, var_b, cvar_b, pn_b, ps_b, pb_b, pg_b = run_monte_carlo_simulation(
+            df_bench_port, list_bench, last_prices_bench, shares_bench, total_val_init_bench, df_val_b, garch_alpha_b, garch_beta_b
+        )
+        
+        with col_graph_b:
             st.pyplot(fig_m_bench, transparent=True)
-            c_perf1, c_perf2, c_perf3 = st.columns(3)
-            c_perf1.metric("Perf. Attendue (Normale)", f"{pn_b:+.2f} %")
-            c_perf2.metric("Perf. Attendue (Student)", f"{ps_b:+.2f} %")
-            c_perf3.metric("Perf. Attendue (Bootstrap)", f"{pb_b:+.2f} %")
-        with col2:
-            st.write("**Métriques Risque (Bootstrap - Benchmark) :**")
+            c_p1_b, c_p2_b, c_p3_b, c_p4_b = st.columns(4)
+            c_p1_b.metric("Perf Normale", f"{pn_b:+.2f} %")
+            c_p2_b.metric("Perf Student", f"{ps_b:+.2f} %")
+            c_p3_b.metric("Perf Bootstrap", f"{pb_b:+.2f} %")
+            c_p4_b.metric("Perf GARCH", f"{pg_b:+.2f} %")
+            
+        with col_params_b:
+            st.divider()
+            st.markdown("**Métriques Risque (Bootstrap) :**")
             st.metric("Valeur Médiane Attendue", f"{med_b_b:,.0f} €")
-            st.metric("Probabilité de Plus-Value", f"{prob_b:.1f} %")
+            st.metric("Probabilité Plus-Value", f"{prob_b:.1f} %")
             st.metric("Value at Risk (95%)", f"- {var_b:,.0f} €")
-            st.metric("CVaR (Expected Shortfall 95%)", f"- {cvar_b:,.0f} €")
+            st.metric("CVaR (Expected Shortfall)", f"- {cvar_b:,.0f} €")
 
     st.divider()
 
     # --- SECTION : FRONTIÈRE EFFICIENTE MODULAIRE ---
     st.header(f"Optimisation de la Frontière Efficiente ({n_portfolios} itérations)")
     
-    # Fonction modulaire pour calculer les métriques de la frontière sans générer le graphique individuel
     def generate_efficient_frontier_metrics(df_assets, list_assets, shares_assets, total_val):
         rets_daily = df_assets.pct_change().dropna()
         np.random.seed(42)
@@ -369,73 +433,61 @@ if st.session_state.get('run_analysis', False):
         
         return ann_rets_arr, ann_vols_arr, sharpes_arr, profiles, w_matrix, weights_curr, curr_ret, curr_vol, last_prices
 
-    # Calcul de la frontière du portefeuille Principal
+    # Modélisation
     ann_rets_m, ann_vols_m, sharpes_m, profs_main, w_mat_main, w_curr_main, curr_ret_m, curr_vol_m, lp_main = generate_efficient_frontier_metrics(
         df_main, list_main, shares_main, total_val_init_main
     )
 
-    # Calcul de la frontière du portefeuille Benchmark (uniquement si au moins 2 actifs)
     has_bench_frontier = len(list_bench) > 1
     if has_bench_frontier:
         ann_rets_b, ann_vols_b, sharpes_b, profs_bench, w_mat_bench, w_curr_bench, curr_ret_b, curr_vol_b, lp_bench = generate_efficient_frontier_metrics(
             df_bench_port, list_bench, shares_bench, total_val_init_bench
         )
     else:
-        # Calcul de la position actuelle simple si 1 seul actif
         rets_daily_b = df_bench_port.pct_change().dropna()
         lp_bench = df_bench_port.iloc[-1]
         w_curr_bench = np.array([1.0])
         curr_ret_b = float(rets_daily_b.mean().values[0] * 252)
         curr_vol_b = float(rets_daily_b.std().values[0] * np.sqrt(252))
 
-    # Calcul du point 100% S&P 500 (^GSPC)
     rets_sp500_raw = df_sp500.pct_change().dropna()
     sp500_ret = rets_sp500_raw.mean() * 252
     sp500_vol = rets_sp500_raw.std() * np.sqrt(252)
 
-    # --- CRÉATION DU GRAPHIQUE DE SUPERPOSITION DE LA FRONTIÈRE ---
+    # --- GRAPHIQUE DE SUPERPOSITION ---
     fig_superposed, ax_ef = plt.subplots(figsize=(11, 5), facecolor='none')
     ax_ef.set_facecolor('none')
 
-    # Nuage de points - Portefeuille Principal (Dégradé Viridis selon Sharpe)
     scatter_main = ax_ef.scatter(ann_vols_m, ann_rets_m, c=sharpes_m, cmap='viridis', s=6, alpha=0.4, label='Simulations Principal')
     cbar = fig_superposed.colorbar(scatter_main, ax=ax_ef)
     cbar.set_label("Ratio de Sharpe (Principal)", color='white')
     cbar.ax.tick_params(colors='white')
 
-    # Nuage de points - Portefeuille Benchmark (Nuage distinct en bleu clair transparent)
     if has_bench_frontier:
         ax_ef.scatter(ann_vols_b, ann_rets_b, color='#00bfff', s=4, alpha=0.12, label='Simulations Benchmark')
 
-    # Placement des points de portefeuilles Actuels (Diamonds)
     ax_ef.scatter(curr_vol_m, curr_ret_m, marker='D', color='#00ff00', s=120, label='Principal Actuel', edgecolors='black', zorder=5)
     ax_ef.scatter(curr_vol_b, curr_ret_b, marker='D', color='#00bfff', s=120, label='Benchmark Actuel', edgecolors='black', zorder=5)
 
-    # Marquage des profils optimaux clés du Portefeuille Principal
     ax_ef.scatter(ann_vols_m[profs_main["Max Sharpe"]], ann_rets_m[profs_main["Max Sharpe"]], marker='*', color='red', s=180, label='Main Max Sharpe', zorder=5)
     ax_ef.scatter(ann_vols_m[profs_main["Min Ulcer"]], ann_rets_m[profs_main["Min Ulcer"]], marker='v', color='magenta', s=100, label='Main Min Ulcer (Sécurité)', zorder=5)
 
-    # Marquage du point optimal Max Sharpe du Benchmark
     if has_bench_frontier:
         ax_ef.scatter(ann_vols_b[profs_bench["Max Sharpe"]], ann_rets_b[profs_bench["Max Sharpe"]], marker='*', color='cyan', s=120, label='Bench Max Sharpe', zorder=5)
 
-    # MARQUAGE DU POINT OBLIGATOIRE : 100% S&P 500 (Cross orange)
     ax_ef.scatter(sp500_vol, sp500_ret, marker='X', color='orange', s=180, label='100% S&P 500 (^GSPC)', edgecolors='white', zorder=6)
 
-    # Formatage cosmétique du graphique sombre
     ax_ef.set_xlabel("Volatilité (Risque)", color='white')
     ax_ef.set_ylabel("Rendement Attendu", color='white')
     ax_ef.tick_params(colors='white')
     ax_ef.grid(alpha=0.15)
     ax_ef.legend(frameon=False, labelcolor='white', bbox_to_anchor=(1.2, 1), loc='upper left')
     
-    # Affichage de la superposition globale
     st.pyplot(fig_superposed, transparent=True)
 
-    # --- ENCADRÉS SÉPARÉS POUR LES COMPOSITIONS OPTIMALES DÉTAILLÉES ---
+    # --- TABLEAUX ET RÉPARTITIONS ---
     tab_ef_main, tab_ef_bench = st.tabs(["📊 Répartition Portefeuille Principal", "📊 Répartition Benchmark"])
 
-    # --- Sous-section : Principal ---
     with tab_ef_main:
         st.markdown("#### Répartitions Optimales (Principal)")
         c_pie1, c_pie2, c_pie3, c_pie4, c_pie5 = st.columns(5)
@@ -463,7 +515,6 @@ if st.session_state.get('run_analysis', False):
                 weights_df[f"{p_name} (%)"] = (w_mat_main[:, p_idx] * 100).round(1)
             st.dataframe(weights_df, use_container_width=True)
 
-    # --- Sous-section : Benchmark ---
     with tab_ef_bench:
         if has_bench_frontier:
             st.markdown("#### Répartitions Optimales (Benchmark)")
