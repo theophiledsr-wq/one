@@ -330,7 +330,8 @@ if st.session_state.get('run_analysis', False):
     # --- SECTION : FRONTIÈRE EFFICIENTE MODULAIRE ---
     st.header(f"Optimisation de la Frontière Efficiente ({n_portfolios} itérations)")
     
-    def generate_efficient_frontier(df_assets, list_assets, shares_assets, total_val, title):
+    # Fonction modulaire pour calculer les métriques de la frontière sans générer le graphique individuel
+    def generate_efficient_frontier_metrics(df_assets, list_assets, shares_assets, total_val):
         rets_daily = df_assets.pct_change().dropna()
         np.random.seed(42)
         w_matrix = np.random.dirichlet(np.ones(len(list_assets)), n_portfolios).T
@@ -363,34 +364,79 @@ if st.session_state.get('run_analysis', False):
         weights_curr /= np.sum(weights_curr)
         curr_ret = np.sum(rets_daily.mean() * 252 * weights_curr)
         curr_vol = np.sqrt(np.dot(weights_curr.T, np.dot(rets_daily.cov() * 252, weights_curr)))
-
-        fig, ax = plt.subplots(figsize=(10, 4), facecolor='none')
-        ax.set_facecolor('none')
-        scatter = ax.scatter(ann_vols_arr, ann_rets_arr, c=sharpes_arr, cmap='viridis', s=5, alpha=0.3)
-        ax.scatter(curr_vol, curr_ret, marker='D', color='white', s=100, label='Actuel', edgecolors='black')
-        ax.scatter(ann_vols_arr[idx_sharpe], ann_rets_arr[idx_sharpe], marker='*', color='red', s=150, label='Max Sharpe')
-        ax.scatter(ann_vols_arr[idx_sortino], ann_rets_arr[idx_sortino], marker='^', color='orange', s=100, label='Max Sortino')
-        ax.scatter(ann_vols_arr[idx_cagr], ann_rets_arr[idx_cagr], marker='P', color='cyan', s=100, label='Max CAGR')
-        ax.scatter(ann_vols_arr[idx_ulcer], ann_rets_arr[idx_ulcer], marker='v', color='magenta', s=100, label='Min Ulcer (Sécurité)')
-        ax.set_xlabel("Volatilité (Risque)", color='white')
-        ax.set_ylabel("Rendement Attendu", color='white')
-        ax.set_title(title, color='white')
-        ax.tick_params(colors='white')
-        ax.legend(frameon=False, labelcolor='white', bbox_to_anchor=(1.05, 1), loc='upper left')
         
         profiles = {"Max Sharpe": idx_sharpe, "Max Sortino": idx_sortino, "Max CAGR": idx_cagr, "Min Ulcer": idx_ulcer}
         
-        return fig, profiles, w_matrix, weights_curr, last_prices
+        return ann_rets_arr, ann_vols_arr, sharpes_arr, profiles, w_matrix, weights_curr, curr_ret, curr_vol, last_prices
 
-    tab_ef_main, tab_ef_bench = st.tabs(["📊 Frontière Portefeuille Principal", "📊 Frontière Benchmark"])
+    # Calcul de la frontière du portefeuille Principal
+    ann_rets_m, ann_vols_m, sharpes_m, profs_main, w_mat_main, w_curr_main, curr_ret_m, curr_vol_m, lp_main = generate_efficient_frontier_metrics(
+        df_main, list_main, shares_main, total_val_init_main
+    )
+
+    # Calcul de la frontière du portefeuille Benchmark (uniquement si au moins 2 actifs)
+    has_bench_frontier = len(list_bench) > 1
+    if has_bench_frontier:
+        ann_rets_b, ann_vols_b, sharpes_b, profs_bench, w_mat_bench, w_curr_bench, curr_ret_b, curr_vol_b, lp_bench = generate_efficient_frontier_metrics(
+            df_bench_port, list_bench, shares_bench, total_val_init_bench
+        )
+    else:
+        # Calcul de la position actuelle simple si 1 seul actif
+        rets_daily_b = df_bench_port.pct_change().dropna()
+        lp_bench = df_bench_port.iloc[-1]
+        w_curr_bench = np.array([1.0])
+        curr_ret_b = float(rets_daily_b.mean().values[0] * 252)
+        curr_vol_b = float(rets_daily_b.std().values[0] * np.sqrt(252))
+
+    # Calcul du point 100% S&P 500 (^GSPC)
+    rets_sp500_raw = df_sp500.pct_change().dropna()
+    sp500_ret = rets_sp500_raw.mean() * 252
+    sp500_vol = rets_sp500_raw.std() * np.sqrt(252)
+
+    # --- CRÉATION DU GRAPHIQUE DE SUPERPOSITION DE LA FRONTIÈRE ---
+    fig_superposed, ax_ef = plt.subplots(figsize=(11, 5), facecolor='none')
+    ax_ef.set_facecolor('none')
+
+    # Nuage de points - Portefeuille Principal (Dégradé Viridis selon Sharpe)
+    scatter_main = ax_ef.scatter(ann_vols_m, ann_rets_m, c=sharpes_m, cmap='viridis', s=6, alpha=0.4, label='Simulations Principal')
+    cbar = fig_superposed.colorbar(scatter_main, ax=ax_ef)
+    cbar.set_label("Ratio de Sharpe (Principal)", color='white')
+    cbar.ax.tick_params(colors='white')
+
+    # Nuage de points - Portefeuille Benchmark (Nuage distinct en bleu clair transparent)
+    if has_bench_frontier:
+        ax_ef.scatter(ann_vols_b, ann_rets_b, color='#00bfff', s=4, alpha=0.12, label='Simulations Benchmark')
+
+    # Placement des points de portefeuilles Actuels (Diamonds)
+    ax_ef.scatter(curr_vol_m, curr_ret_m, marker='D', color='#00ff00', s=120, label='Principal Actuel', edgecolors='black', zorder=5)
+    ax_ef.scatter(curr_vol_b, curr_ret_b, marker='D', color='#00bfff', s=120, label='Benchmark Actuel', edgecolors='black', zorder=5)
+
+    # Marquage des profils optimaux clés du Portefeuille Principal
+    ax_ef.scatter(ann_vols_m[profs_main["Max Sharpe"]], ann_rets_m[profs_main["Max Sharpe"]], marker='*', color='red', s=180, label='Main Max Sharpe', zorder=5)
+    ax_ef.scatter(ann_vols_m[profs_main["Min Ulcer"]], ann_rets_m[profs_main["Min Ulcer"]], marker='v', color='magenta', s=100, label='Main Min Ulcer (Sécurité)', zorder=5)
+
+    # Marquage du point optimal Max Sharpe du Benchmark
+    if has_bench_frontier:
+        ax_ef.scatter(ann_vols_b[profs_bench["Max Sharpe"]], ann_rets_b[profs_bench["Max Sharpe"]], marker='*', color='cyan', s=120, label='Bench Max Sharpe', zorder=5)
+
+    # MARQUAGE DU POINT OBLIGATOIRE : 100% S&P 500 (Cross orange)
+    ax_ef.scatter(sp500_vol, sp500_ret, marker='X', color='orange', s=180, label='100% S&P 500 (^GSPC)', edgecolors='white', zorder=6)
+
+    # Formatage cosmétique du graphique sombre
+    ax_ef.set_xlabel("Volatilité (Risque)", color='white')
+    ax_ef.set_ylabel("Rendement Attendu", color='white')
+    ax_ef.tick_params(colors='white')
+    ax_ef.grid(alpha=0.15)
+    ax_ef.legend(frameon=False, labelcolor='white', bbox_to_anchor=(1.2, 1), loc='upper left')
+    
+    # Affichage de la superposition globale
+    st.pyplot(fig_superposed, transparent=True)
+
+    # --- ENCADRÉS SÉPARÉS POUR LES COMPOSITIONS OPTIMALES DÉTAILLÉES ---
+    tab_ef_main, tab_ef_bench = st.tabs(["📊 Répartition Portefeuille Principal", "📊 Répartition Benchmark"])
 
     # --- Sous-section : Principal ---
     with tab_ef_main:
-        fig_main, profs_main, w_mat_main, w_curr_main, lp_main = generate_efficient_frontier(
-            df_main, list_main, shares_main, total_val_init_main, "Frontière Efficiente - Principal"
-        )
-        st.pyplot(fig_main, transparent=True)
-        
         st.markdown("#### Répartitions Optimales (Principal)")
         c_pie1, c_pie2, c_pie3, c_pie4, c_pie5 = st.columns(5)
         with c_pie1: st.pyplot(plot_pie_chart(w_curr_main, list_main, "Actuel"), transparent=True)
@@ -419,12 +465,7 @@ if st.session_state.get('run_analysis', False):
 
     # --- Sous-section : Benchmark ---
     with tab_ef_bench:
-        if len(list_bench) > 1:
-            fig_bench, profs_bench, w_mat_bench, w_curr_bench, lp_bench = generate_efficient_frontier(
-                df_bench_port, list_bench, shares_bench, total_val_init_bench, "Frontière Efficiente - Benchmark"
-            )
-            st.pyplot(fig_bench, transparent=True)
-            
+        if has_bench_frontier:
             st.markdown("#### Répartitions Optimales (Benchmark)")
             c_pie1_b, c_pie2_b, c_pie3_b, c_pie4_b, c_pie5_b = st.columns(5)
             with c_pie1_b: st.pyplot(plot_pie_chart(w_curr_bench, list_bench, "Actuel"), transparent=True)
@@ -451,4 +492,4 @@ if st.session_state.get('run_analysis', False):
                     weights_df_b[f"{p_name} (%)"] = (w_mat_bench[:, p_idx] * 100).round(1)
                 st.dataframe(weights_df_b, use_container_width=True)
         else:
-            st.info("Le portefeuille Benchmark doit contenir au moins 2 actifs pour générer une frontière efficiente.")
+            st.info("Le portefeuille Benchmark contient 1 seul actif. Sa position actuelle unique est matérialisée par le diamant bleu clair sur le graphique général.")
